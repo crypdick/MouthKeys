@@ -78,6 +78,56 @@ def test_dropdowns_preserve_existing_custom_settings(monkeypatch):
     app.processEvents()
 
 
+@pytest.mark.parametrize("model", ["large", "turbo", "large-v3", "large-v3-turbo"])
+def test_model_dropdown_uses_specific_names_for_saved_aliases(monkeypatch, model):
+    from PySide6.QtWidgets import QApplication
+
+    from mouthkeys import gui
+    from mouthkeys.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    Config(model=model).save()
+    monkeypatch.setattr(gui.Window, "poll", lambda self: None)
+    window = gui.Window()
+    window.timer.stop()
+    field = window.fields["model"]
+    names = [field.itemData(index) for index in range(field.count())]
+    assert "large" not in names
+    assert "turbo" not in names
+    assert names.count("large-v3") == names.count("large-v3-turbo") == 1
+    assert names[0] == "large-v3"
+    assert names.index("large-v3-turbo") < names.index("medium") < names.index("tiny")
+    assert field.currentText() == gui.MODEL_ALIASES.get(model, model)
+    assert Config.load().model == model  # Opening settings does not rewrite configuration.
+    assert window.save()
+    assert Config.load().model == field.currentText()
+    assert not window.isVisible()
+    window.close()
+    app.processEvents()
+
+
+@pytest.mark.parametrize("model", ["large", "turbo"])
+def test_model_dropdown_preserves_local_directory_named_like_alias(monkeypatch, tmp_path, model):
+    from PySide6.QtWidgets import QApplication
+
+    from mouthkeys import gui
+    from mouthkeys.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / model).mkdir()
+    Config(model=model).save()
+    monkeypatch.setattr(gui.Window, "poll", lambda self: None)
+    window = gui.Window()
+    window.timer.stop()
+    assert window.fields["model"].currentText() == model
+    assert window.save()
+    assert Config.load().model == model
+    assert not window.isVisible()
+    window.close()
+    app.processEvents()
+
+
 def test_microphone_choices_use_discovery_without_capture(monkeypatch):
     import subprocess
 
