@@ -12,7 +12,7 @@ import time
 import uuid
 import wave
 
-from .audio import Recorder, check_audio, live_levels
+from .audio import Recorder, check_audio, live_meter
 from .config import Config, runtime_dir, state_dir
 from .delivery import Delivery
 from .storage import History
@@ -40,13 +40,13 @@ class Controller:
         self.preview_worker = None
         self.preview_text = ""
         self.preview_at = 0
-        self.levels = []
+        self.meter = {}
 
     def status(self):
         with self.lock:
             return {
                 "preview": self.preview_text,
-                "levels": self.levels if self.phase == "recording" else [],
+                "meter": self.meter if self.phase == "recording" else {},
                 "microphone": self.config.audio_source if hasattr(self, "config") else "default",
                 "phase": self.phase,
                 "message": self.message,
@@ -94,7 +94,7 @@ class Controller:
             if self.phase != "idle":
                 raise ValueError(f"Busy ({self.phase}); wait or cancel before {action}")
             if action == "start":
-                self.levels = []
+                self.meter = {}
                 self.preview_text = ""
                 self.preview_at = time.monotonic()
                 self.config = Config.load()
@@ -238,9 +238,11 @@ class Controller:
         with self.lock:
             if self.phase == "recording":
                 try:
-                    self.levels = live_levels(self.history.recording(self.item_id))
+                    meter = live_meter(self.history.recording(self.item_id))
+                    if meter["frame"] != self.meter.get("frame"):
+                        self.meter = {**meter, "at": time.monotonic()}
                 except (OSError, ValueError, EOFError, wave.Error):
-                    self.levels = []
+                    self.meter = {}
             if (
                 self.phase == "recording"
                 and time.monotonic() - self.preview_at >= 2
@@ -312,7 +314,7 @@ def serve():
             signal.signal(signal.SIGTERM, shutdown)
             signal.signal(signal.SIGINT, shutdown)
             try:
-                server.serve_forever(poll_interval=0.1)
+                server.serve_forever(poll_interval=0.025)
             finally:
                 path.unlink(missing_ok=True)
 
