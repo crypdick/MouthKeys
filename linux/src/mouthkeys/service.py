@@ -48,7 +48,7 @@ class Controller:
         self.notice = None
         self.notice_serial = 0
         self.notice_token = uuid.uuid4().hex
-        self.pruned_at = 0
+        self.pruned_at = float("-inf")
 
     def report_error(self, message):
         with self.lock:
