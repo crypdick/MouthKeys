@@ -1,40 +1,21 @@
-# contributing.
+# Contributing
 
-thanks for helping. MouthKeys is for wicked fast voice to text on macOS. the most welcome changes make that more reliable: recognition, delivery, hotkeys, audio and the overlay.
+MouthKeys for Linux focuses on reliable local dictation, shortcuts, audio capture, text delivery,
+and a small Qt interface.
 
-## issues.
+For bugs, include your distribution, desktop/compositor and version, Wayland or X11 session,
+Python version, selected speech model/device, destination application, and exact reproduction
+steps. Include `mouthkeys doctor` and `mouthkeys status` output when useful. Remove private
+transcripts, microphone names, paths, and other sensitive details before sharing diagnostics.
 
-- **bugs:** say what you did, what you expected, and what happened. include your macOS version, your Mac, the speech model, and the app you were dictating into. the app log helps: App Settings › Debug › Reveal Log File. the app's Feedback page drafts an issue for you.
-- **ideas:** say what problem it solves before how.
+Run `./linux/check.sh` before a PR. Tests must remain headless and use fake capture, clipboard,
+and key adapters with isolated XDG directories. Never record real audio, modify a real clipboard,
+synthesize keys, show windows, or play sounds in tests. Real desktop checks are listed in
+[linux/README.md](linux/README.md#development-and-validation).
 
-## build and test.
+Target `crypdick/MouthKeys`, base `main`. Describe the concrete behavior change, validation,
+and remaining desktop limitations. Include screenshots for visible UI changes when possible.
 
-`./build.sh` makes a signed Debug build; [docs/BUILDING.md](docs/BUILDING.md) covers what to install and how to sign. the test suite, unsigned:
-
-```bash
-xcodebuild test -project Fluid.xcodeproj -scheme Fluid -destination 'platform=macOS' \
-  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
-```
-
-if a build sits at `ClangStatCache` and never moves, add `SDK_STAT_CACHE_ENABLE=NO`.
-
-## pull requests.
-
-- target `main`.
-- one fix or feature per PR. say how you tested it, and on which Mac.
-- the house rules, including how tests must behave, are in [CLAUDE.md](CLAUDE.md).
-- for anything you can see (the overlay, settings, the menu bar), attach a screenshot or a short video.
-- keep telemetry off, the upstream updater off, and Fluid Intelligence out.
-- don't change `DEVELOPMENT_TEAM` in the project; `build.sh` passes yours at build time. never commit an API key. `scripts/check-team-id.sh` works as a pre-commit hook that catches a team change.
-
-## releases.
-
-maintainers cut releases with `scripts/release.sh`; the steps are in [docs/RELEASING.md](docs/RELEASING.md).
-
-## upstream.
-
-MouthKeys ports fixes from [FluidVoice](https://github.com/altic-dev/FluidVoice) by hand; see [UPSTREAM.md](UPSTREAM.md). if your fix also applies to FluidVoice, please send it to them too. they built nearly all of this.
-
-## license.
-
-contributions are licensed under GPL-3.0, like the rest of the code.
+Keep telemetry, cloud transcription, and update checks out. Model downloads must remain explicit.
+Credit upstream contributions as described in [UPSTREAM.md](UPSTREAM.md).
+Contributions are licensed under GPL-3.0.

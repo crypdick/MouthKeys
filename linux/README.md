@@ -5,8 +5,8 @@ fork. Record with a desktop shortcut, transcribe on your CPU or NVIDIA GPU, and 
 editor or terminal. No account, cloud transcription, telemetry, or update checks.
 
 The Linux runtime is Python/Qt with [faster-whisper](https://github.com/SYSTRAN/faster-whisper).
-The original Swift/macOS app remains intact. This is an initial Linux implementation, not full
-macOS feature parity: no Apple/Parakeet models, media controls, Spoken Send,
+The macOS app is maintained in the upstream MouthKeys repository. This Linux implementation
+does not provide full macOS feature parity: no Apple/Parakeet models, media controls, Spoken Send,
 or automatic clipboard restoration. The Linux UI provides recording controls, history, copy,
 audio reprocessing, model downloads, and settings. Its floating recording panel follows the
 macOS Datasheet Mono design: a square 340 × 130 panel, side controls, three-line live transcript,
@@ -269,4 +269,4 @@ Before calling a desktop setup verified, run this manual check:
 - Check the panel's positioning, drag/reset, history, copy, reprocess, and dismissal on your
   compositor; final delivery should still target the editor when using X11 automatic paste.
 
-The macOS build and its tests still use Xcode; the Linux runtime does not modify those sources.
+The macOS application, Xcode build, and tests are maintained in the upstream MouthKeys repository.

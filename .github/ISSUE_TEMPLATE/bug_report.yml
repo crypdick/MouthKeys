@@ -49,7 +49,7 @@ body:
     id: speech-model
     attributes:
       label: Speech model
-      placeholder: "Parakeet TDT v3"
+      placeholder: "base.en, CPU, compute_type=default"
     validations:
       required: false
   - type: input
@@ -57,14 +57,14 @@ body:
     attributes:
       label: App you were dictating into
       description: Delivery bugs often depend on the target app.
-      placeholder: "c11, Ghostty, Safari, Notes..."
+      placeholder: "Ghostty, VS Code, Firefox..."
     validations:
       required: false
   - type: input
-    id: macos-version
+    id: linux-version
     attributes:
-      label: macOS Version
-      placeholder: "macOS 15.5"
+      label: Linux distribution and desktop
+      placeholder: "Fedora 43, KDE Wayland"
     validations:
       required: true
   - type: dropdown
@@ -72,8 +72,8 @@ body:
     attributes:
       label: Architecture
       options:
-        - Apple Silicon
-        - Intel
+        - x86_64
+        - aarch64
         - Unknown
     validations:
       required: true
@@ -81,11 +81,11 @@ body:
     id: logs
     attributes:
       label: Logs or crash report
-      description: Paste the relevant lines from the app log (Settings › Debug Settings › Reveal Log File) or a crash report.
+      description: Share mouthkeys doctor/status output and relevant daemon.log errors from $XDG_STATE_HOME/mouthkeys (normally ~/.local/state/mouthkeys). Remove private details.
       render: text
     validations:
       required: false
-  - type: upload
+  - type: textarea
     id: media
     attributes:
       label: Screenshots or screen recording
