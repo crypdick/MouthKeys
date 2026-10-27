@@ -487,7 +487,8 @@ def test_audio_budget_prunes_old_failures_but_keeps_text_and_active_audio(contro
     assert history.latest_text() == "Transcript 1"
 
 
-def test_idle_maintenance_enforces_changed_audio_budget(controller):
+def test_idle_maintenance_enforces_changed_audio_budget(controller, monkeypatch):
+    monkeypatch.setattr("mouthkeys.service.time.monotonic", lambda: 5.0)
     Config(audio_budget_mb=1).save()
     for index in range(2):
         item = str(uuid.uuid4())
