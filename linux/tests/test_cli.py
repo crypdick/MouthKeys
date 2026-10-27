@@ -62,3 +62,23 @@ def test_real_daemon_ipc_duplicate_start_malformed_request_and_shutdown():
             raise
     assert process.returncode == 0, errors.decode()
     assert not (runtime_dir() / "control.sock").exists()
+
+
+def test_overlay_launcher_skips_headless_and_existing_panel(monkeypatch):
+    import fcntl
+
+    from mouthkeys.service import ensure_overlay
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("Must not launch a desktop process")
+
+    monkeypatch.setattr(subprocess, "Popen", unexpected)
+    ensure_overlay()
+    monkeypatch.setenv("DISPLAY", ":fake")
+    with (runtime_dir() / "overlay.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as wake:
+            wake.bind(str(runtime_dir() / "overlay-wake.sock"))
+            wake.settimeout(1)
+            ensure_overlay()
+            assert wake.recv(64) == b"wake"

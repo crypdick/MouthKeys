@@ -3,8 +3,10 @@
 import sys
 from dataclasses import asdict
 from datetime import datetime
+from pathlib import Path
 
 from PySide6.QtCore import QLocale, QProcess, Qt, QThread, QTimer, Signal
+from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -16,14 +18,14 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSpinBox,
-    QTabWidget,
+    QStackedWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
 from .config import Config
-from .service import ensure_daemon, request
+from .service import ensure_daemon, ensure_overlay, request
 
 COMPUTE_TYPES = [
     "int8",
@@ -99,16 +101,56 @@ class Window(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("MouthKeys")
-        self.resize(660, 560)
+        icon_path = str(Path(__file__).parent / "assets" / "icon.png")
+        self.setWindowIcon(QIcon(icon_path))
+        self.resize(1000, 680)
+        self.setMinimumSize(820, 560)
         self.jobs = set()
         self.polling = False
         self.rows = []
         self.download = None
-        layout = QVBoxLayout(self)
-        title = QLabel("MOUTHKEYS  /  LINUX")
-        title.setStyleSheet("font-size: 22px; font-weight: bold")
-        layout.addWidget(title)
-        layout.addWidget(QLabel("LOCAL VOICE → TEXT"))
+        root = QHBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+        sidebar = QWidget()
+        sidebar.setObjectName("sidebar")
+        sidebar.setFixedWidth(220)
+        navigation = QVBoxLayout(sidebar)
+        navigation.setContentsMargins(20, 28, 20, 20)
+        navigation.setSpacing(12)
+        mark = QLabel()
+        mark.setPixmap(
+            QPixmap(icon_path).scaled(
+                64,
+                64,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        )
+        navigation.addWidget(mark)
+        brand = QLabel("MOUTHKEYS")
+        brand.setObjectName("brand")
+        navigation.addWidget(brand)
+        tagline = QLabel("WICKED FAST VOICE TO TEXT")
+        tagline.setObjectName("placard")
+        navigation.addWidget(tagline)
+        navigation.addSpacing(28)
+        self.nav = QListWidget()
+        self.nav.setObjectName("navigation")
+        self.nav.addItems(["History", "App Settings"])
+        navigation.addWidget(self.nav)
+        footer = QLabel("LOCAL DICTATION  /  LINUX")
+        footer.setObjectName("placard")
+        navigation.addWidget(footer)
+        root.addWidget(sidebar)
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(28, 26, 28, 24)
+        layout.setSpacing(16)
+        self.page_title = QLabel("History")
+        self.page_title.setObjectName("pageTitle")
+        layout.addWidget(self.page_title)
+        root.addWidget(content, 1)
         self.status = QLabel("Ready")
         self.status.setWordWrap(True)
         self.status.setStyleSheet("color: #ff4f1f; padding: 12px 0")
@@ -127,16 +169,25 @@ class Window(QWidget):
         )
         hint.setWordWrap(True)
         layout.addWidget(hint)
-        tabs = QTabWidget()
+        tabs = QStackedWidget()
+        self.nav.currentRowChanged.connect(tabs.setCurrentIndex)
+        self.nav.currentTextChanged.connect(self.page_title.setText)
         layout.addWidget(tabs)
         history = QWidget()
         history_layout = QVBoxLayout(history)
         self.list = QListWidget()
+        self.list.setWordWrap(True)
+        self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.list.currentRowChanged.connect(self.select)
-        history_layout.addWidget(self.list)
+        history_split = QHBoxLayout()
+        history_split.addWidget(self.list, 1)
+        history_layout.addLayout(history_split, 1)
         self.preview = QTextEdit()
         self.preview.setReadOnly(True)
-        history_layout.addWidget(self.preview)
+        history_split.addWidget(self.preview, 2)
+        self.preview.setPlaceholderText(
+            "No History Yet\n\nYour transcriptions will appear here. Start dictating to begin."
+        )
         row = QHBoxLayout()
         for text, action in (("Copy", "copy"), ("Reprocess audio", "reprocess")):
             button = QPushButton(text)
@@ -148,7 +199,7 @@ class Window(QWidget):
         clear.clicked.connect(self.clear_history)
         row.addWidget(clear)
         history_layout.addLayout(row)
-        tabs.addTab(history, "History")
+        tabs.addWidget(history)
         settings = QWidget()
         form = QFormLayout(settings)
         self.fields = {}
@@ -204,17 +255,41 @@ class Window(QWidget):
         warm = QPushButton("Load model into memory")
         warm.clicked.connect(lambda: self.send("warmup"))
         form.addRow(warm)
-        tabs.addTab(settings, "Settings")
-        self.setStyleSheet(
-            "QWidget { background: #f5f3ed; color: #171717; font-family: monospace; }"
-            "QPushButton { padding: 7px; border: 1px solid #777; }"
-            "QPushButton:disabled { color: #888; }"
-            "QLineEdit, QTextEdit, QListWidget { background: #fffdf7; }"
-        )
+        tabs.addWidget(settings)
+        self.nav.setCurrentRow(0)
+        self.apply_theme()
+        QApplication.styleHints().colorSchemeChanged.connect(self.apply_theme)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.poll)
         self.timer.start(700)
         self.poll()
+
+    def apply_theme(self, *_):
+        light = QApplication.styleHints().colorScheme() == Qt.ColorScheme.Light
+        surface, ink, edge, side, field = (
+            ("#ffffff", "#111214", "#111214", "#f2f2f4", "#ffffff")
+            if light
+            else ("#111214", "#ebebec", "#2c2e33", "#0c0d0f", "#0c0d0f")
+        )
+        self.setStyleSheet(
+            f"QWidget {{ background: {surface}; color: {ink}; font-family: sans-serif;"
+            "font-size: 13px; }"
+            f"QWidget#sidebar {{ background: {side}; border-right: 1px solid {edge}; }}"
+            f"#sidebar QLabel, #navigation {{ background: {side}; font-family: monospace; }}"
+            "#brand { font-size: 20px; font-weight: 600; letter-spacing: 2px; }"
+            "#placard { font-size: 10px; }"
+            "#pageTitle { font-size: 24px; font-weight: 600; }"
+            f"QPushButton {{ padding: 8px 12px; border: 1px solid {edge}; border-radius: 0; }}"
+            f"QPushButton:hover {{ border-color: {ink}; }}"
+            f"QPushButton:pressed {{ background: {ink}; color: {surface}; }}"
+            "QPushButton:disabled { color: #777; }"
+            f"QLineEdit, QTextEdit, QListWidget, QComboBox, QSpinBox {{ background: {field};"
+            f"border: 1px solid {edge}; padding: 8px; selection-background-color: {ink};"
+            f"selection-color: {surface}; }}"
+            "QListWidget#navigation { border: 0; padding: 0; }"
+            "QListWidget::item { padding: 12px 8px; }"
+            f"QListWidget::item:selected {{ background: {ink}; color: {surface}; }}"
+        )
 
     def send(self, action, data=None, callback=None):
         job = Request(action, data, self)
@@ -256,7 +331,7 @@ class Window(QWidget):
         self.list.clear()
         for row in self.rows:
             date = datetime.fromtimestamp(row["created"]).strftime("%m-%d %H:%M")
-            label = f"{date}  {row['status']}  {row['text'][:65] or row['error'][:65]}"
+            label = f"{date}  /  {row['status'].upper()}\n{row['text'][:65] or row['error'][:65]}"
             self.list.addItem(QListWidgetItem(label))
         index = next((i for i, row in enumerate(self.rows) if row["id"] == selected_id), 0)
         self.list.setCurrentRow(index if self.rows else -1)
@@ -323,6 +398,7 @@ class Window(QWidget):
 
 def launch():
     ensure_daemon()
+    ensure_overlay()
     app = QApplication(sys.argv)
     app.setApplicationName("MouthKeys")
     window = Window()

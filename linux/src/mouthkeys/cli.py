@@ -44,6 +44,7 @@ def main(argv=None):
     commands = parser.add_subparsers(dest="command", required=True)
     for action in (
         "gui",
+        "overlay",
         "daemon",
         "start",
         "stop",
@@ -97,6 +98,10 @@ def main(argv=None):
             return int(result["session"] == "headless" or not all(result["commands"].values()))
         elif args.command == "install-desktop":
             print(install_desktop(args.autostart))
+        elif args.command == "overlay":
+            from .overlay import launch
+
+            return launch()
         elif args.command == "gui":
             from .gui import launch
 
@@ -112,6 +117,10 @@ def main(argv=None):
                 ensure_daemon()
             action = "clear" if args.command == "clear-history" else args.command
             result = request(action, **({"id": args.id} if hasattr(args, "id") else {}))
+            if args.command in ("start", "toggle", "reprocess"):
+                from .service import ensure_overlay
+
+                ensure_overlay()
             print(json.dumps(result, indent=2))
         return 0
     except KeyboardInterrupt:

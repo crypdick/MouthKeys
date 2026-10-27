@@ -38,6 +38,8 @@ class Recorder:
                     "16000",
                     "-c:a",
                     "pcm_s16le",
+                    "-flush_packets",
+                    "1",
                     str(path),
                 ],
                 # EOF is a lifeline: even SIGKILL of the daemon closes this pipe.
@@ -83,3 +85,31 @@ def check_audio(path: Path):
     with wave.open(str(path), "rb") as wav:
         if wav.getnframes() < 1600:
             raise ValueError("Recording is too short; speak for at least a moment")
+
+
+def read_live_audio(path: Path, seconds=20):
+    """Read bounded samples even before FFmpeg finalizes its WAV length."""
+    import numpy as np
+
+    with path.open("rb") as source:
+        with wave.open(source, "rb") as wav:
+            if (wav.getnchannels(), wav.getsampwidth(), wav.getframerate()) != (1, 2, 16000):
+                raise ValueError("Expected mono 16 kHz PCM")
+            frames = max(0, (path.stat().st_size - source.tell()) // 2)
+            wav.setpos(max(0, frames - int(seconds * 16000)))
+            raw = wav.readframes(int(seconds * 16000))
+    return np.frombuffer(raw[: len(raw) // 2 * 2], dtype="<i2").astype(np.float32) / 32768.0
+
+
+def live_levels(path: Path):
+    import numpy as np
+
+    samples = read_live_audio(path, 5.25)
+    samples = np.pad(samples, (max(0, 84000 - len(samples)), 0))
+    # Actual microphone energy, never an ornamental/random waveform.
+    levels = [
+        min(1.0, float(np.sqrt(np.mean(chunk * chunk))) * 8)
+        for chunk in np.array_split(samples, 63)
+        if len(chunk)
+    ]
+    return [0.0] * (63 - len(levels)) + levels
