@@ -1,3 +1,42 @@
-# Agent instructions
+# MouthKeys for Linux
 
-Read [AGENTS.md](AGENTS.md) and [linux/README.md](linux/README.md).
+This checkout is `crypdick/MouthKeys`, Ricardo Decal's Linux fork. Runtime, tests, packaging,
+and the lockfile live in `linux/`. Read `linux/README.md` for architecture, delivery limits,
+installation, and manual desktop validation. `AGENTS.md` links to this file.
+
+## Validation
+
+Run `./linux/check.sh`, which performs:
+
+```sh
+uv sync --project linux --python 3.13 --extra gui --locked
+uv run --project linux ruff check linux
+uv run --project linux ruff format --check linux
+QT_QPA_PLATFORM=offscreen uv run --project linux pytest linux/tests
+uv build linux
+```
+
+Tests must stay headless: fake capture/clipboard/key adapters, isolated XDG directories, and Qt's
+offscreen backend. Never use a live microphone, touch the real clipboard, synthesize keys, show
+windows, take focus, or play sounds in tests. Give waits bounded timeouts. Real compositor focus,
+microphone capture, and paste behavior require the manual checklist in `linux/README.md`.
+
+## Product rules
+
+Keep dictation local, telemetry off, and update checks off. Downloads happen only on explicit
+request. Clipboard delivery is the default. Wayland has no automatic paste. X11 automatic paste
+requires an explicit stop, a captured destination, and focus rechecks; never activate a target
+window or send Return. Preserve Ghostty/terminal clipboard paste behavior. Cancel before delivery
+must suppress late delivery. Keep recovery audio bounded and private, and persist transcripts before
+desktop delivery. Expose configuration in App Settings as well as the CLI.
+
+## Git and delivery
+
+`origin` is the personal Linux fork. `mouthkeys-upstream` is `BenevolentFutures/MouthKeys`.
+PRs, when requested, **must** target `crypdick/MouthKeys --base main`. Never publish personal
+changes to the parent project or its website. Upstream changes are adapted by hand; see `UPSTREAM.md`.
+
+Carry authorized changes through branch, build, tests, fresh-context review, merge to `main`,
+and push. The user prefers direct merges without PRs. Ask only for decisions or desktop checks
+that require the user. Do not install over or restart the user's running app without authorization.
+macOS code and tooling are maintained upstream.
