@@ -13,7 +13,13 @@ from mouthkeys.service import request
 
 def test_config_cli_and_doctor(capsys):
     assert main(["config", "language", "auto"]) == 0
-    assert json.loads(capsys.readouterr().out)["language"] == "auto"
+    config = json.loads(capsys.readouterr().out)
+    assert config["language"] == "auto"
+    assert config["compute_type"] == "default"
+    assert main(["config", "compute_type", "int8"]) == 0
+    assert json.loads(capsys.readouterr().out)["compute_type"] == "int8"
+    assert main(["config", "language", "en"]) == 0
+    assert json.loads(capsys.readouterr().out)["compute_type"] == "int8"
     assert main(["doctor"]) == 1  # No real desktop is exposed to tests.
     assert json.loads(capsys.readouterr().out)["session"] == "headless"
     assert main(["config", "max_seconds", "zero"]) == 1

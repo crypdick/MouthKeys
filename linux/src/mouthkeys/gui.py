@@ -28,9 +28,9 @@ from .config import Config
 from .service import ensure_daemon, ensure_overlay, request
 
 COMPUTE_TYPES = [
-    "int8",
-    "auto",
     "default",
+    "auto",
+    "int8",
     "float32",
     "float16",
     "int8_float32",
@@ -279,8 +279,9 @@ class Window(QWidget):
             "Choose a microphone or enter a PulseAudio source name. Default follows your desktop."
         )
         self.fields["compute_type"].setToolTip(
-            "int8 is the CPU default; float16 requires compatible hardware. "
-            "Auto selects for your device."
+            "default follows the model's stored precision, with hardware fallbacks.\n"
+            "auto selects the fastest supported type for your device.\n"
+            "int8 reduces memory use; default may use more memory and run slower on CPU."
         )
         save = QPushButton("Save settings")
         save.clicked.connect(self.save)
