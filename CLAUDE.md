@@ -1,6 +1,6 @@
 # MouthKeys for Linux
 
-This checkout is `crypdick/MouthKeys`, Ricardo Decal's Linux fork. Runtime, tests, packaging,
+This checkout is `crypdick/MouthKeys-Linux`, Ricardo Decal's Linux fork. Runtime, tests, packaging,
 and the lockfile live in `linux/`. Read `linux/README.md` for architecture, delivery limits,
 installation, and manual desktop validation. `AGENTS.md` links to this file.
 
@@ -33,7 +33,7 @@ desktop delivery. Expose configuration in App Settings as well as the CLI.
 ## Git and delivery
 
 `origin` is the personal Linux fork. `mouthkeys-upstream` is `BenevolentFutures/MouthKeys`.
-PRs, when requested, **must** target `crypdick/MouthKeys --base main`. Never publish personal
+PRs, when requested, **must** target `crypdick/MouthKeys-Linux --base main`. Never publish personal
 changes to the parent project or its website. Upstream changes are adapted by hand; see `UPSTREAM.md`.
 
 Carry authorized changes through branch, build, tests, fresh-context review, merge to `main`,
