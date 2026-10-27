@@ -36,7 +36,7 @@ class Config:
     model: str = "base.en"
     language: str = "en"
     device: str = "cpu"
-    compute_type: str = "int8"
+    compute_type: str = "default"
     audio_source: str = "default"
     delivery: str = "clipboard"
     paste_backend: str = "auto"

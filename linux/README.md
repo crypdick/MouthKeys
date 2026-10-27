@@ -47,7 +47,8 @@ mouthkeys gui
 Ensure `~/.local/bin` is on your PATH (`uv tool update-shell` can configure it). The desktop
 launcher contains an absolute executable path. For a terminal-only install, omit `[gui]`.
 Models download **only** when you run `mouthkeys download` or press Download selected model.
-The default is `base.en` (English), CPU, INT8. Downloads come
+The default is `base.en` (English), CPU, and the model's stored precision with hardware
+fallbacks (`compute_type=default`). Downloads come
 from Hugging Face; dictation itself uses cached models with `local_files_only=True`.
 
 ## Set up your shortcut
@@ -155,6 +156,12 @@ Models appear in approximate transcription accuracy order, strongest first, for 
 dictation. Accuracy varies by language and audio; `.en` and distilled models are English-only.
 Duplicate aliases use their specific names: `large-v3` and `large-v3-turbo`.
 
+Compute type `default` follows the model's stored precision with CTranslate2 hardware
+fallbacks; `auto` chooses the fastest supported type. `int8` is an optional way to reduce
+memory use and improve CPU speed. Model precision can use more memory and run slower than
+INT8 on CPU. Existing saved precision settings are preserved. To switch an existing
+configuration to model precision, run `mouthkeys config compute_type default`.
+
 ```sh
 # More accurate English model (larger and slower on CPU):
 mouthkeys config model small.en
@@ -166,10 +173,10 @@ mouthkeys config language auto
 mouthkeys download
 # CUDA requires compatible NVIDIA/CTranslate2 libraries; see faster-whisper's documentation:
 mouthkeys config device cuda
-mouthkeys config compute_type float16
-# Return to the portable CPU path:
+mouthkeys config compute_type default
+# Return to CPU (optionally use int8 for lower memory use and faster inference):
 mouthkeys config device cpu
-mouthkeys config compute_type int8
+mouthkeys config compute_type default
 # Pick a PulseAudio/PipeWire source (pactl is provided by pulseaudio-utils on Ubuntu):
 pactl list short sources
 mouthkeys config audio_source YOUR_SOURCE_NAME
