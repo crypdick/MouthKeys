@@ -13,7 +13,7 @@ and key adapters with isolated XDG directories. Never record real audio, modify 
 synthesize keys, show windows, or play sounds in tests. Real desktop checks are listed in
 [linux/README.md](linux/README.md#development-and-validation).
 
-Target `crypdick/MouthKeys`, base `main`. Describe the concrete behavior change, validation,
+Target `crypdick/MouthKeys-Linux`, base `main`. Describe the concrete behavior change, validation,
 and remaining desktop limitations. Include screenshots for visible UI changes when possible.
 
 Keep telemetry, cloud transcription, and update checks out. Model downloads must remain explicit.

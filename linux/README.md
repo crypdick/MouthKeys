@@ -1,7 +1,7 @@
 # MouthKeys for Linux
 
-Local dictation for Linux, in the personal [crypdick/MouthKeys](https://github.com/crypdick/MouthKeys)
-fork. Record with a desktop shortcut, transcribe on your CPU or NVIDIA GPU, and paste into your
+Local dictation for Linux, in the personal [crypdick/MouthKeys-Linux](https://github.com/crypdick/MouthKeys-Linux)
+repository. Record with a desktop shortcut, transcribe on your CPU or NVIDIA GPU, and paste into your
 editor or terminal. No account, cloud transcription, telemetry, or update checks.
 
 The Linux runtime is Python/Qt with [faster-whisper](https://github.com/SYSTRAN/faster-whisper).
@@ -35,8 +35,8 @@ your distribution's repositories. `mouthkeys doctor` reports missing command-lin
 Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then:
 
 ```sh
-git clone https://github.com/crypdick/MouthKeys.git
-cd MouthKeys
+git clone https://github.com/crypdick/MouthKeys-Linux.git
+cd MouthKeys-Linux
 uv tool install --python 3.13 './linux[gui]'
 mouthkeys install-desktop
 mouthkeys download

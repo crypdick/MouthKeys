@@ -1,10 +1,12 @@
-# MouthKeys for Linux
+# MouthKeys-Linux
 
 Local dictation for Linux: record with a desktop shortcut, transcribe on your CPU or NVIDIA
 GPU, and paste into your editor or terminal. No account, cloud transcription, telemetry,
 or update checks.
 
-This repository maintains the Linux Python/Qt implementation. See the
+This repository maintains the Linux Python/Qt implementation of
+[MouthKeys](https://github.com/BenevolentFutures/MouthKeys). The macOS app is maintained upstream.
+See the
 [Linux guide](linux/README.md) for installation, shortcuts, models, settings, text delivery,
 privacy, recovery, and desktop validation.
 
@@ -14,8 +16,8 @@ Install Python/FFmpeg and desktop dependencies as described in the [guide](linux
 then:
 
 ```sh
-git clone https://github.com/crypdick/MouthKeys.git
-cd MouthKeys
+git clone https://github.com/crypdick/MouthKeys-Linux.git
+cd MouthKeys-Linux
 uv tool install --python 3.13 './linux[gui]'
 mouthkeys install-desktop
 mouthkeys download
@@ -25,6 +27,21 @@ mouthkeys gui
 
 Bind `mouthkeys toggle` to a desktop shortcut. Clipboard delivery is the default; paste with
 your normal paste key after transcription. All configuration options are available in App Settings.
+
+## Update an existing installation
+
+Pull the latest code in your clone, then reinstall:
+
+```sh
+git pull --ff-only
+uv tool install --force --python 3.13 './linux[gui]'
+mouthkeys install-desktop
+```
+
+Stop the daemon with `mouthkeys shutdown` before updating if it is running, and reopen with
+`mouthkeys gui` afterward. Reinstallation preserves your settings, history, and downloaded models.
+Existing clones can update their remote with
+`git remote set-url origin https://github.com/crypdick/MouthKeys-Linux.git`.
 
 ## Development
 
