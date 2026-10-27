@@ -28,10 +28,22 @@ class Transcriber:
             )
             self.key = key
 
+    def preview(self, path: Path, config: Config):
+        """Decode the latest 20 seconds of a growing PCM WAV."""
+        from .audio import read_live_audio
+
+        audio = read_live_audio(path)
+        if len(audio) < 8000:
+            return ""
+        return self._decode(audio, config)
+
     def transcribe(self, path: Path, config: Config):
+        return self._decode(str(path), config)
+
+    def _decode(self, audio, config):
         self.load(config)
         segments, _ = self.model.transcribe(
-            str(path),
+            audio,
             language=None if config.language == "auto" else config.language,
             beam_size=1,
             vad_filter=True,

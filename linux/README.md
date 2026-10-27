@@ -6,9 +6,13 @@ editor or terminal. No account, cloud transcription, telemetry, or update checks
 
 The Linux runtime is Python/Qt with [faster-whisper](https://github.com/SYSTRAN/faster-whisper).
 The original Swift/macOS app remains intact. This is an initial Linux implementation, not full
-macOS feature parity: no streaming preview, Apple/Parakeet models, media controls, Spoken Send,
+macOS feature parity: no Apple/Parakeet models, media controls, Spoken Send,
 or automatic clipboard restoration. The Linux UI provides recording controls, history, copy,
-audio reprocessing, model downloads, and settings.
+audio reprocessing, model downloads, and settings. Its floating recording panel follows the
+macOS Datasheet Mono design: a square 340 × 130 panel, side controls, three-line live transcript,
+real microphone trace, timer, and system light/dark appearance. The main window uses the same
+sidebar, typography hierarchy, and ruled surfaces. Linux uses system sans/monospace fonts in
+place of Apple's fonts and does not expose macOS-only settings.
 
 ## Install
 
@@ -71,8 +75,24 @@ after changing desktop session types; its display environment is inherited at la
 
 1. Focus your editor or terminal and press the toggle shortcut.
 2. Speak, then press it again. The controller shows recording/transcribing/ready status;
-   `mouthkeys status` also reports it for a status bar. There are no sounds or pop-up windows.
+   `mouthkeys status` also reports it for a status bar. With the GUI extra installed, a floating
+   panel appears automatically, including when Settings is closed. It shows provisional words
+   while you speak, then the final delivery status. It never intentionally takes keyboard focus.
+   There are no sounds.
 3. When transcription finishes, paste with Ctrl+V, or Ctrl+Shift+V in most terminals.
+
+The panel opens near the bottom of the screen containing the pointer. Drag it to reposition;
+double-click its surface to reset. History opens the main window, Copy copies the finished
+transcript, × cancels/dismisses, and Reprocess retries retained audio. Linux compositors control
+placement and stacking: Wayland may ignore requested positioning or keep other windows above
+it. Verify focus behavior on your desktop before enabling X11 automatic paste.
+
+Live previews run locally on the selected model, roughly two seconds after the previous preview
+finishes, over the most recent 20 seconds of audio. They can revise words and lag on slower CPUs;
+`mouthkeys warmup` avoids first-use model loading. They are not saved or delivered. Stopping
+waits for any preview inference, then transcribes the complete recording for history and delivery.
+The preview and final pass share one model worker lock. The waveform is actual recorded energy,
+not a simulated animation. Cancel discards the preview and suppresses final delivery.
 
 Recordings stop automatically after five minutes by default. A busy model rejects additional
 recording commands explicitly; it never silently replaces pending work. Cancel suppresses
@@ -205,5 +225,11 @@ Before calling a desktop setup verified, run this manual check:
 - Switch windows while X11 inference runs; confirm it falls back to copy.
 - Reprocess retained audio, copy from history, and verify recovery after restarting the daemon.
 - Confirm the microphone indicator turns off on stop/cancel and at the maximum duration.
+- Close Settings and start with the shortcut: confirm the floating panel appears, shows words
+  while speaking, and leaves your editor focused. Check both light and dark system appearances.
+- Stop, cancel, and start again while preview inference is running; check that old words never
+  appear in the new recording and cancellation never changes the clipboard.
+- Check the panel's positioning, drag/reset, history, copy, reprocess, and dismissal on your
+  compositor; final delivery should still target the editor when using X11 automatic paste.
 
 The macOS build and its tests still use Xcode; the Linux runtime does not modify those sources.

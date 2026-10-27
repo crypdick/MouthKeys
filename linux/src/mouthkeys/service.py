@@ -10,8 +10,9 @@ import sys
 import threading
 import time
 import uuid
+import wave
 
-from .audio import Recorder, check_audio
+from .audio import Recorder, check_audio, live_levels
 from .config import Config, runtime_dir, state_dir
 from .delivery import Delivery
 from .storage import History
@@ -35,10 +36,18 @@ class Controller:
         self.cancelled = False
         self.started = None
         self.worker = None
+        self.model_lock = threading.Lock()
+        self.preview_worker = None
+        self.preview_text = ""
+        self.preview_at = 0
+        self.levels = []
 
     def status(self):
         with self.lock:
             return {
+                "preview": self.preview_text,
+                "levels": self.levels if self.phase == "recording" else [],
+                "microphone": self.config.audio_source if hasattr(self, "config") else "default",
                 "phase": self.phase,
                 "message": self.message,
                 "id": self.item_id,
@@ -54,6 +63,7 @@ class Controller:
             if action == "toggle":
                 action = "stop" if self.phase == "recording" else "start"
             if action == "cancel":
+                self.preview_text = ""
                 self.cancelled = True
                 if self.phase == "recording":
                     try:
@@ -84,6 +94,9 @@ class Controller:
             if self.phase != "idle":
                 raise ValueError(f"Busy ({self.phase}); wait or cancel before {action}")
             if action == "start":
+                self.levels = []
+                self.preview_text = ""
+                self.preview_at = time.monotonic()
                 self.config = Config.load()
                 self.item_id = str(uuid.uuid4())
                 self.cancelled = False
@@ -108,6 +121,7 @@ class Controller:
                     raise ValueError("No retained audio for this entry")
                 self.config = Config.load()
                 # A retry is a new attempt: failure/cancellation must not erase the original.
+                self.preview_text = ""
                 retry_id = str(uuid.uuid4())
                 shutil.copyfile(self.history.recording(item_id), self.history.recording(retry_id))
                 self.history.begin(retry_id)
@@ -138,6 +152,7 @@ class Controller:
                 self.message = "Copied" if action == "copy" else "Paste requested"
                 return self.status()
             if action == "clear":
+                self.preview_text = ""
                 self.history.clear()
                 self.item_id = None
                 self.message = "History and recordings cleared"
@@ -146,7 +161,8 @@ class Controller:
 
     def _warmup(self):
         try:
-            self.transcriber.load(self.config)
+            with self.model_lock:
+                self.transcriber.load(self.config)
             message = "Model ready"
         except Exception as exc:
             message = f"Model unavailable: {exc}. Run mouthkeys download first."
@@ -165,16 +181,19 @@ class Controller:
         try:
             path = self.history.recording(self.item_id)
             check_audio(path)
-            text = self.transcriber.transcribe(path, self.config)
+            with self.model_lock:
+                text = self.transcriber.transcribe(path, self.config)
             with self.lock:
                 if self.cancelled:
                     self.history.update(self.item_id, "cancelled")
                     path.unlink(missing_ok=True)
                     self.message = "Cancelled"
                 elif not text:
+                    self.preview_text = ""
                     self.history.update(self.item_id, "failed", error="No speech detected")
                     self.message = "No speech detected; audio retained for reprocessing"
                 else:
+                    self.preview_text = text
                     # Persist before any clipboard/keyboard work so delivery failures lose no words.
                     self.history.update(self.item_id, "transcribed", text)
                     result = self.delivery.deliver(text, self.config, target)
@@ -192,14 +211,46 @@ class Controller:
                     self.history.recording(self.item_id).unlink(missing_ok=True)
                     self.message = "Cancelled"
                 else:
+                    self.preview_text = text
                     self.history.update(self.item_id, "failed", text, str(exc))
                     self.message = f"{exc}. Saved in history; audio retained for reprocessing."
         finally:
             with self.lock:
                 self.phase = "idle"
 
+    def _preview(self, item_id, config):
+        try:
+            with self.model_lock:
+                with self.lock:
+                    if self.phase != "recording" or self.item_id != item_id:
+                        return
+                text = self.transcriber.preview(self.history.recording(item_id), config)
+            with self.lock:
+                if self.phase == "recording" and self.item_id == item_id and not self.cancelled:
+                    self.preview_text = text
+        except Exception:
+            pass  # Preview is provisional; final inference reports actionable errors.
+        finally:
+            with self.lock:
+                self.preview_at = time.monotonic()
+
     def tick(self):
         with self.lock:
+            if self.phase == "recording":
+                try:
+                    self.levels = live_levels(self.history.recording(self.item_id))
+                except (OSError, ValueError, EOFError, wave.Error):
+                    self.levels = []
+            if (
+                self.phase == "recording"
+                and time.monotonic() - self.preview_at >= 2
+                and (self.preview_worker is None or not self.preview_worker.is_alive())
+                and hasattr(self.transcriber, "preview")
+            ):
+                self.preview_worker = threading.Thread(
+                    target=self._preview, args=(self.item_id, self.config), daemon=True
+                )
+                self.preview_worker.start()
             if self.phase == "recording" and (
                 self.recorder.finished()
                 or time.monotonic() - self.started >= self.config.max_seconds
@@ -305,3 +356,33 @@ def ensure_daemon():
         except (FileNotFoundError, ConnectionRefusedError):
             time.sleep(0.05)
     raise RuntimeError(f"Daemon did not start; see {log}")
+
+
+def ensure_overlay():
+    """Optional desktop feedback; CLI-only installations remain usable."""
+    import importlib.util
+
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        return
+    if importlib.util.find_spec("PySide6") is None:
+        return
+    with (runtime_dir() / "overlay.lock").open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as wake:
+                wake.settimeout(0.1)
+                try:
+                    wake.sendto(b"wake", str(runtime_dir() / "overlay-wake.sock"))
+                except OSError:
+                    pass  # An initializing panel does its own immediate first poll.
+            return
+    with (state_dir() / "overlay.log").open("a") as output:
+        os.chmod(output.name, 0o600)
+        subprocess.Popen(
+            [sys.executable, "-m", "mouthkeys", "overlay"],
+            stdin=subprocess.DEVNULL,
+            stdout=output,
+            stderr=output,
+            start_new_session=True,
+        )

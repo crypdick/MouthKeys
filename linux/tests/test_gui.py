@@ -106,3 +106,38 @@ def test_missing_pactl_keeps_manual_microphone_selection(monkeypatch):
 
     monkeypatch.setattr(subprocess, "run", run)
     assert gui.audio_sources() == ["default"]
+
+
+def test_overlay_never_takes_focus_and_tracks_recording_lifecycle(monkeypatch):
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication
+
+    from mouthkeys.overlay import Overlay
+
+    app = QApplication.instance() or QApplication([])
+    panel = Overlay()
+    panel.timer.stop()
+    panel.animation.stop()
+    shown = []
+    monkeypatch.setattr(panel, "show", lambda: shown.append(True))
+    assert panel.windowFlags() & Qt.WindowType.WindowDoesNotAcceptFocus
+    assert panel.testAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+    assert panel.focusPolicy() == Qt.FocusPolicy.NoFocus
+    panel.set_status({"phase": "recording", "id": "a", "seconds": 3, "preview": "hello"})
+    assert shown == [True]
+    assert panel.data["preview"] == "hello"
+    assert not panel.buttons["copy"].isEnabled()
+    panel.set_status({"phase": "transcribing", "id": "a", "preview": "hello"})
+    assert panel.seconds == 3
+    panel.set_status(
+        {"phase": "idle", "id": "a", "preview": "Hello!", "message": "Copied — paste into your app"}
+    )
+    assert panel.buttons["copy"].isEnabled()
+    assert panel.dismiss_at is not None
+    panel.set_status({"phase": "recording", "id": "b", "seconds": 0, "preview": ""})
+    assert shown == [True, True]
+    assert panel.dismiss_at is None
+    panel.set_status({"phase": "idle", "id": "b", "preview": "", "message": "Cancelled"})
+    assert not panel.isVisible()
+    panel.close()
+    app.processEvents()

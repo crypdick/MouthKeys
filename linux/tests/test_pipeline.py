@@ -273,3 +273,97 @@ def test_config_validation_and_atomic_roundtrip():
     with pytest.raises(ValueError):
         Config(max_seconds=-1).save()
     assert Config.load() == config
+
+
+def test_preview_is_live_but_never_persisted_or_delivered(controller):
+    controller.transcriber.preview = lambda path, config: "provisional words"
+    controller.command("start")
+    controller.preview_at = 0
+    controller.tick()
+    controller.preview_worker.join(3)
+    assert not controller.preview_worker.is_alive()
+    assert controller.status()["preview"] == "provisional words"
+    assert controller.history.rows()[0]["text"] == ""
+    assert not controller.delivery.calls
+    controller.command("stop")
+    finish(controller)
+    assert controller.status()["preview"] == controller.transcriber.text
+    assert controller.delivery.calls[0][0] == controller.transcriber.text
+
+
+def test_cancelled_preview_cannot_leak_into_next_recording(controller):
+    entered, release = threading.Event(), threading.Event()
+
+    def preview(path, config):
+        entered.set()
+        assert release.wait(3)
+        return "stale words"
+
+    controller.transcriber.preview = preview
+    controller.command("start")
+    controller.preview_at = 0
+    controller.tick()
+    assert entered.wait(2)
+    controller.command("cancel")
+    controller.command("start")
+    release.set()
+    controller.preview_worker.join(3)
+    assert not controller.preview_worker.is_alive()
+    assert controller.status()["preview"] == ""
+    assert not controller.delivery.calls
+    controller.command("cancel")
+
+
+def test_final_inference_waits_for_preview_and_cancel_suppresses_delivery(controller):
+    entered, release = threading.Event(), threading.Event()
+
+    def preview(path, config):
+        entered.set()
+        assert release.wait(3)
+        return "stale words"
+
+    controller.transcriber.preview = preview
+    controller.command("start")
+    controller.preview_at = 0
+    controller.tick()
+    assert entered.wait(2)
+    controller.command("stop")
+    assert not controller.transcriber.entered.is_set()
+    controller.command("cancel")
+    release.set()
+    finish(controller)
+    controller.preview_worker.join(3)
+    assert controller.status()["preview"] == ""
+    assert not controller.delivery.calls
+
+
+def test_preview_failure_does_not_prevent_final_transcription(controller):
+    def preview(path, config):
+        raise RuntimeError("Preview unavailable")
+
+    controller.transcriber.preview = preview
+    controller.command("start")
+    controller.preview_at = 0
+    controller.tick()
+    controller.preview_worker.join(3)
+    controller.command("stop")
+    finish(controller)
+    assert controller.delivery.calls
+
+
+@pytest.mark.parametrize("empty", [False, True])
+def test_failed_final_never_exposes_provisional_text_as_copyable(controller, empty):
+    controller.transcriber.preview = lambda path, config: "unfinished words"
+    controller.command("start")
+    controller.preview_at = 0
+    controller.tick()
+    controller.preview_worker.join(3)
+    assert controller.status()["preview"] == "unfinished words"
+    if empty:
+        controller.transcriber.text = ""
+    else:
+        controller.transcriber.error = RuntimeError("Final inference failed")
+    controller.command("stop")
+    finish(controller)
+    assert controller.status()["preview"] == ""
+    assert not controller.delivery.calls
