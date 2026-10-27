@@ -1,5 +1,18 @@
 # MouthKeys
 
+## Personal Linux fork
+
+This checkout is `crypdick/MouthKeys`, Ricardo Decal's personal fork. Linux work lives in
+`linux/`; read `linux/README.md` for architecture, delivery limits, and validation. The original
+macOS app remains supported and its safety rules below still apply. Linux builds use
+`uv sync --project linux --python 3.13 --extra gui --locked`, `uv run --project linux pytest`,
+`uv run --project linux ruff check linux`, and `uv build linux`.
+
+For this fork, PRs **must** target `crypdick/MouthKeys --base main`, overriding the upstream
+repository routing below. `origin` is the personal fork; `mouthkeys-upstream` is
+`BenevolentFutures/MouthKeys`. Never publish personal changes to the parent project or its site.
+Keep Linux tests headless, with fake capture/clipboard/key adapters and isolated XDG directories.
+
 macOS dictation app, forked from FluidVoice (see `UPSTREAM.md`). The product is **wicked fast voice to text**. Fluid Intelligence is removed, telemetry is hard-off (`AnalyticsConfig.isConfigured` is false), and the upstream updater is off (`AppDelegate.upstreamUpdatesDisabled`). Keep all three that way. An updater of our own, Sparkle 2, is decided and planned in `docs/UPDATES.md`; until that build lands, the app checks for nothing.
 
 Atin dictates into Claude Code in c11 all day with the installed app. Text delivery into c11 and Ghostty (forced Reliable Paste) must never regress.
