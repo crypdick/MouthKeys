@@ -91,8 +91,10 @@ Live previews run locally on the selected model, roughly two seconds after the p
 finishes, over the most recent 20 seconds of audio. They can revise words and lag on slower CPUs;
 `mouthkeys warmup` avoids first-use model loading. They are not saved or delivered. Stopping
 waits for any preview inference, then transcribes the complete recording for history and delivery.
-The preview and final pass share one model worker lock. The waveform is actual recorded energy,
-not a simulated animation. Cancel discards the preview and suppresses final delivery.
+The preview and final pass share one model worker lock. The waveform uses actual recorded energy with 20 ms capture buffers and a separate 60 Hz
+animation clock. Bars scroll at 12 per second of speech, ease to their measured heights, and
+hold during silence after a 250 ms hangover, following the native macOS motion. Only the newest
+20 ms of audio is metered; preview inference does not drive animation. Cancel discards the preview and suppresses final delivery.
 
 Recordings stop automatically after five minutes by default. A busy model rejects additional
 recording commands explicitly; it never silently replaces pending work. Cancel suppresses

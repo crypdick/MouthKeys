@@ -141,3 +141,31 @@ def test_overlay_never_takes_focus_and_tracks_recording_lifecycle(monkeypatch):
     assert not panel.isVisible()
     panel.close()
     app.processEvents()
+
+
+def test_overlay_deduplicates_meter_frames_and_resets_on_new_recording(monkeypatch):
+    from PySide6.QtWidgets import QApplication
+
+    from mouthkeys import overlay
+
+    app = QApplication.instance() or QApplication([])
+    panel = overlay.Overlay()
+    panel.timer.stop()
+    monkeypatch.setattr(panel, "show", lambda: None)
+    now = time.monotonic()
+    data = {
+        "phase": "recording",
+        "id": "a",
+        "seconds": 1,
+        "meter": {"frame": 16000, "level": 0.8, "at": now},
+    }
+    panel.set_status(data)
+    first_voice = panel.trace.last_voice
+    panel.set_status({**data, "meter": {**data["meter"], "at": now + 0.1}})
+    assert panel.trace.last_voice == first_voice
+    panel.set_status({**data, "id": "b", "meter": {}})
+    assert panel.trace.last_voice is None
+    assert panel.trace.shown == [2] * 63
+    panel.animation.stop()
+    panel.close()
+    app.processEvents()

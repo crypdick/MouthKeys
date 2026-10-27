@@ -57,6 +57,10 @@ def test_recorder_uses_supervised_ffmpeg_and_finishes_wav(monkeypatch, tmp_path)
         def __init__(self, args, **kwargs):
             assert args[1:4] == ["-m", "mouthkeys.capture", "ffmpeg"]
             assert args[args.index("-f") + 1] == "pulse"
+            before_input = args[: args.index("-i")]
+            assert before_input[before_input.index("-sample_rate") + 1] == "16000"
+            assert before_input[before_input.index("-channels") + 1] == "1"
+            assert before_input[before_input.index("-fragment_size") + 1] == "640"
             assert kwargs["stdin"] == subprocess.PIPE
             assert kwargs["start_new_session"]
             self.stdin = open(os.devnull, "wb")

@@ -7,12 +7,13 @@ import subprocess
 import sys
 import time
 
-from PySide6.QtCore import QSocketNotifier, Qt, QTimer
+from PySide6.QtCore import QRect, QRectF, QSocketNotifier, Qt, QTimer
 from PySide6.QtGui import QColor, QCursor, QFont, QPainter, QTextLayout
 from PySide6.QtWidgets import QApplication, QPushButton, QWidget
 
 from .config import runtime_dir
 from .gui import Request
+from .trace import Trace
 
 
 class Overlay(QWidget):
@@ -31,6 +32,9 @@ class Overlay(QWidget):
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setFixedSize(424, 146)
         self.data = {}
+        self.trace = Trace()
+        self.meter_frame = None
+        self.text_cache = None
         self.jobs = set()
         self.pending = False
         self.active = False
@@ -58,8 +62,8 @@ class Overlay(QWidget):
         self.timer.timeout.connect(self.poll)
         self.timer.start(200)
         self.animation = QTimer(self)
-        self.animation.timeout.connect(self.update)
-        self.animation.start(80)
+        self.animation.setTimerType(Qt.TimerType.PreciseTimer)
+        self.animation.timeout.connect(self.animate)
         self.apply_theme()
         QApplication.styleHints().colorSchemeChanged.connect(self.apply_theme)
 
@@ -123,11 +127,12 @@ class Overlay(QWidget):
             self.pending = False
             if "result" in response:
                 self.failures = 0
-                self.timer.setInterval(200)
+                self.timer.setInterval(50 if response["result"]["phase"] == "recording" else 200)
                 self.set_status(response["result"])
             else:
                 self.hide()  # Shutdown/disconnect must not leave a stale recording panel.
                 self.active = False
+                self.animation.stop()
                 self.failures += 1
                 self.timer.setInterval(min(5000, 200 * 2 ** min(self.failures, 5)))
 
@@ -156,6 +161,19 @@ class Overlay(QWidget):
                 self.dismiss_at = 0
         if self.dismiss_at is not None and time.monotonic() >= self.dismiss_at:
             self.hide()
+        now = time.monotonic()
+        if data["phase"] == "recording":
+            if new_recording or self.data.get("phase") != "recording":
+                self.trace.begin(now)
+                self.meter_frame = None
+            meter = data.get("meter", {})
+            if meter.get("frame") is not None and meter["frame"] != self.meter_frame:
+                self.trace.ingest(meter["level"], min(now, meter["at"]))
+                self.meter_frame = meter["frame"]
+        else:
+            self.trace.stop(now)
+        if active and not self.animation.isActive():
+            self.animation.start(16)
         self.active = active
         self.data = data
         if data["phase"] == "recording":
@@ -163,6 +181,20 @@ class Overlay(QWidget):
         self.buttons["copy"].setEnabled(not active and bool(data.get("preview")))
         self.buttons["reprocess"].setEnabled(not active)
         self.update()
+
+    def animate(self):
+        if not self.isVisible():
+            self.animation.stop()
+            return
+        now = time.monotonic()
+        self.trace.advance(now)
+        self.update(QRect(53, 68, 252, 40))
+        if (
+            self.data.get("phase") == "idle"
+            and self.trace.stopped_at is not None
+            and now - self.trace.stopped_at >= 0.06
+        ):
+            self.animation.stop()
 
     def paintEvent(self, event):
         p = QPainter(self)
@@ -181,31 +213,36 @@ class Overlay(QWidget):
         # Lay out prose into three 16 px lines, keeping the newest words in view.
         font = QFont("sans-serif")
         font.setPixelSize(13)
-        layout = QTextLayout(text, font)
-        layout.beginLayout()
-        lines = []
-        while True:
-            line = layout.createLine()
-            if not line.isValid():
-                break
-            line.setLineWidth(316)
-            lines.append(line)
-        layout.endLayout()
+        if self.text_cache is None or self.text_cache[0] != text:
+            layout = QTextLayout(text, font)
+            layout.beginLayout()
+            lines = []
+            while True:
+                line = layout.createLine()
+                if not line.isValid():
+                    break
+                line.setLineWidth(316)
+                lines.append(text[line.textStart() : line.textStart() + line.textLength()])
+            layout.endLayout()
+            self.text_cache = (text, lines[-3:])
         p.setFont(font)
         p.setPen(QColor(self.dim if phase == "transcribing" else self.ink))
-        for i, line in enumerate(lines[-3:]):
-            part = text[line.textStart() : line.textStart() + line.textLength()]
+        for i, part in enumerate(self.text_cache[1]):
             p.drawText(54, 28 + i * 16, part)
         p.setPen(QColor(self.edge))
         p.drawLine(54, 87, 304, 87)
-        levels = self.data.get("levels", []) if phase == "recording" else []
         p.setPen(Qt.PenStyle.NoPen)
-        for i in range(63):
-            level = levels[i] if i < len(levels) else 0
-            height = max(2, min(30, round(level * 30)))
-            p.fillRect(54 + i * 4, 87 - height // 2, 2, height, QColor(self.ink))
+        p.save()
+        p.setClipRect(QRectF(54, 70, 250, 34))
+        scale = self.devicePixelRatioF()
+        for i, height in enumerate(self.trace.shown):
+            x = round((54 + i * 4 - self.trace.fraction * 4) * scale) / scale
+            top = round((87 - height / 2) * scale) / scale
+            bottom = round((87 + height / 2) * scale) / scale
+            p.fillRect(QRectF(x, top, 2, bottom - top), QColor(self.ink))
+        p.restore()
         if phase == "transcribing":
-            x = 54 + (int(time.monotonic() / 0.08) % 55) * 4
+            x = 54 + (int(time.monotonic() / (1.05 / 55)) % 55) * 4
             p.fillRect(x, 85, 24, 4, QColor("#ff4f1f"))
         p.setPen(QColor("#ff4f1f"))
         if phase == "recording":

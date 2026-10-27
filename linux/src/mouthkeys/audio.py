@@ -28,6 +28,12 @@ class Recorder:
                     "-y",
                     "-f",
                     "pulse",
+                    "-sample_rate",
+                    "16000",
+                    "-channels",
+                    "1",
+                    "-fragment_size",
+                    "640",  # 20 ms of mono 16 kHz PCM, before the input opens.
                     "-i",
                     config.audio_source,
                     "-t",
@@ -87,8 +93,8 @@ def check_audio(path: Path):
             raise ValueError("Recording is too short; speak for at least a moment")
 
 
-def read_live_audio(path: Path, seconds=20):
-    """Read bounded samples even before FFmpeg finalizes its WAV length."""
+def _read_live_audio(path: Path, seconds):
+    """Read bounded samples and their frame cursor before the WAV is finalized."""
     import numpy as np
 
     with path.open("rb") as source:
@@ -98,18 +104,20 @@ def read_live_audio(path: Path, seconds=20):
             frames = max(0, (path.stat().st_size - source.tell()) // 2)
             wav.setpos(max(0, frames - int(seconds * 16000)))
             raw = wav.readframes(int(seconds * 16000))
-    return np.frombuffer(raw[: len(raw) // 2 * 2], dtype="<i2").astype(np.float32) / 32768.0
+    samples = np.frombuffer(raw[: len(raw) // 2 * 2], dtype="<i2").astype(np.float32) / 32768.0
+    return samples, frames
 
 
-def live_levels(path: Path):
+def read_live_audio(path: Path, seconds=20):
+    return _read_live_audio(path, seconds)[0]
+
+
+def live_meter(path: Path):
+    import math
+
     import numpy as np
 
-    samples = read_live_audio(path, 5.25)
-    samples = np.pad(samples, (max(0, 84000 - len(samples)), 0))
-    # Actual microphone energy, never an ornamental/random waveform.
-    levels = [
-        min(1.0, float(np.sqrt(np.mean(chunk * chunk))) * 8)
-        for chunk in np.array_split(samples, 63)
-        if len(chunk)
-    ]
-    return [0.0] * (63 - len(levels)) + levels
+    samples, frames = _read_live_audio(path, 0.02)
+    rms = float(np.sqrt(np.mean(samples * samples))) if len(samples) else 0.0
+    level = max(0.0, min(1.0, (20 * math.log10(max(rms, 1e-9)) + 60) / 55))
+    return {"frame": frames, "level": level}
