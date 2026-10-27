@@ -4,18 +4,18 @@ import sys
 from dataclasses import asdict
 from datetime import datetime
 
-from PySide6.QtCore import QProcess, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import QLocale, QProcess, Qt, QThread, QTimer, Signal
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
     QFormLayout,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QSpinBox,
     QTabWidget,
     QTextEdit,
     QVBoxLayout,
@@ -24,6 +24,61 @@ from PySide6.QtWidgets import (
 
 from .config import Config
 from .service import ensure_daemon, request
+
+COMPUTE_TYPES = [
+    "int8",
+    "auto",
+    "default",
+    "float32",
+    "float16",
+    "int8_float32",
+    "int8_float16",
+    "int8_bfloat16",
+    "bfloat16",
+    "int16",
+]
+
+
+def language_choices():
+    # Match the tokenizer in our installed, version-bounded transcription engine.
+    from faster_whisper.tokenizer import _LANGUAGE_CODES
+
+    names = {"haw": "Hawaiian", "ht": "Haitian Creole", "jw": "Javanese", "yue": "Cantonese"}
+    choices = []
+    for code in _LANGUAGE_CODES:
+        locale = QLocale(code)
+        name = names.get(code, QLocale.languageToString(locale.language()))
+        choices.append((f"{name if name != 'C' else code} ({code})", code))
+    return [("Detect automatically", "auto"), *sorted(choices)]
+
+
+def audio_sources():
+    import subprocess
+
+    from .delivery import session
+
+    if session() == "headless":
+        return ["default"]
+    try:
+        result = subprocess.run(
+            ["pactl", "list", "short", "sources"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=2,
+        )
+        return [
+            "default",
+            *[line.split()[1] for line in result.stdout.splitlines() if len(line.split()) >= 2],
+        ]
+    except (OSError, subprocess.SubprocessError):
+        return ["default"]
+
+
+def field_value(field):
+    if isinstance(field, QSpinBox):
+        return field.value()
+    return field.currentText() if field.isEditable() else field.currentData()
 
 
 class Request(QThread):
@@ -98,21 +153,48 @@ class Window(QWidget):
         form = QFormLayout(settings)
         self.fields = {}
         config = asdict(Config.load())
+        from faster_whisper import available_models
+
         choices = {
+            "model": available_models(),
+            "language": language_choices(),
+            "compute_type": COMPUTE_TYPES,
+            "audio_source": audio_sources(),
             "device": ["cpu", "cuda", "auto"],
             "delivery": ["clipboard", "x11"],
             "paste_backend": ["auto", "xdotool", "wtype", "ydotool"],
             "paste_shortcut": ["ctrl+shift+v", "ctrl+v"],
         }
-        for key in config:
-            if key in choices:
-                field = QComboBox()
-                field.addItems(choices[key])
-                field.setCurrentText(str(config[key]))
+        for key, value in config.items():
+            if key == "max_seconds":
+                field = QSpinBox()
+                field.setRange(1, 3600)
+                field.setSuffix(" seconds")
+                field.setValue(value)
             else:
-                field = QLineEdit(str(config[key]))
+                field = QComboBox()
+                for option in choices[key]:
+                    label, data = option if isinstance(option, tuple) else (option, option)
+                    field.addItem(label, data)
+                # Preserve custom model paths, microphone names, and prior CLI settings.
+                if field.findData(value) < 0:
+                    field.addItem(value, value)
+                field.setCurrentIndex(field.findData(value))
+                if key in ("model", "audio_source"):
+                    field.setEditable(True)
+                    field.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
             self.fields[key] = field
             form.addRow(key.replace("_", " ").capitalize(), field)
+        self.fields["model"].setToolTip(
+            "Choose a model or enter a local model path / Hugging Face ID."
+        )
+        self.fields["audio_source"].setToolTip(
+            "Choose a microphone or enter a PulseAudio source name. Default follows your desktop."
+        )
+        self.fields["compute_type"].setToolTip(
+            "int8 is the CPU default; float16 requires compatible hardware. "
+            "Auto selects for your device."
+        )
         save = QPushButton("Save settings")
         save.clicked.connect(self.save)
         form.addRow(save)
@@ -202,11 +284,7 @@ class Window(QWidget):
 
     def save(self):
         try:
-            values = {
-                key: field.currentText() if isinstance(field, QComboBox) else field.text()
-                for key, field in self.fields.items()
-            }
-            values["max_seconds"] = int(values["max_seconds"])
+            values = {key: field_value(field) for key, field in self.fields.items()}
             Config(**values).save()
             self.status.setText("Saved; settings apply to the next recording")
             return True

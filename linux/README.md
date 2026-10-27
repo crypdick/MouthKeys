@@ -123,6 +123,13 @@ another app to receive it. Standard manual paste needs neither tool nor extra pr
 
 ## Models, microphones, and recovery
 
+The GUI's **Settings** tab has dropdowns for model, language, compute type, microphone,
+device, and delivery settings. Languages show names and save the engine's language codes;
+**Detect automatically** selects automatic language detection. Model and microphone fields
+also accept custom model paths/IDs and PulseAudio source names. Microphone discovery uses
+`pactl` when available; otherwise you can enter a source name. Recording duration uses a
+bounded seconds control. Selecting a model does not download it: use **Download selected model**.
+
 ```sh
 # More accurate English model (larger and slower on CPU):
 mouthkeys config model small.en
