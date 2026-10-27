@@ -6,7 +6,6 @@ import signal
 import socket
 import socketserver
 import subprocess
-import sys
 import threading
 import time
 import uuid
@@ -15,6 +14,7 @@ import wave
 from .audio import Recorder, check_audio, live_meter
 from .config import Config, runtime_dir, state_dir
 from .delivery import Delivery
+from .processes import python_command
 from .storage import History
 from .transcribe import Transcriber
 
@@ -41,10 +41,28 @@ class Controller:
         self.preview_text = ""
         self.preview_at = 0
         self.meter = {}
+        self.interrupted = False
+        self.dictation_delivery = False
+        self.stop_done = threading.Event()
+        self.stop_done.set()
+        self.notice = None
+        self.notice_serial = 0
+        self.notice_token = uuid.uuid4().hex
+        self.pruned_at = 0
+
+    def report_error(self, message):
+        with self.lock:
+            self.notice_serial += 1
+            self.notice = {
+                "serial": f"{self.notice_token}:{self.notice_serial}",
+                "message": message,
+                "at": time.time(),
+            }
 
     def status(self):
         with self.lock:
             return {
+                "notice": self.notice,
                 "preview": self.preview_text,
                 "meter": self.meter if self.phase == "recording" else {},
                 "microphone": self.config.audio_source if hasattr(self, "config") else "default",
@@ -55,6 +73,18 @@ class Controller:
             }
 
     def command(self, action, **data):
+        # A stop acknowledgment must not precede its focus snapshot. The worker
+        # resolves focus outside the state lock; a delayed lookup falls back to copy.
+        gate = {"ready": threading.Event(), "valid": True}
+        result = self._command(action, _focus_gate=gate, **data)
+        if action in ("stop", "toggle") and result.get("phase") == "stopping":
+            if not gate["ready"].wait(timeout=4):
+                gate["valid"] = False
+        return result
+
+    def _command(self, action, _focus_gate, **data):
+        if action in ("copy", "paste"):
+            return self._manual_delivery(action, data)
         with self.lock:
             if action == "status":
                 return self.status()
@@ -62,34 +92,29 @@ class Controller:
                 return self.history.rows()
             if action == "toggle":
                 action = "stop" if self.phase == "recording" else "start"
+            if self.interrupted:
+                raise ValueError("Service is shutting down")
             if action == "cancel":
+                if self.phase == "delivering":
+                    raise ValueError(
+                        "Delivery already started; waiting for clipboard/paste to finish"
+                    )
                 self.preview_text = ""
                 self.cancelled = True
                 if self.phase == "recording":
-                    try:
-                        self.recorder.stop()
-                    finally:
-                        self.recorder = None
-                        self.history.recording(self.item_id).unlink(missing_ok=True)
-                        self.history.update(self.item_id, "cancelled")
-                        self.phase, self.message, self.started = "idle", "Cancelled", None
-                elif self.phase in ("transcribing", "loading"):
-                    self.message = "Cancelling; waiting for model to finish"
+                    self._stop(None)
+                elif self.phase in ("stopping", "transcribing", "loading"):
+                    self.message = "Cancelling; waiting for capture/model to finish"
                 return self.status()
             if action == "stop":
                 if self.phase != "recording":
                     raise ValueError("Not recording")
-                # Freeze configuration and destination at stop, before model work.
-                target = self.delivery.focus() if self.config.delivery == "x11" else None
-                try:
-                    self.recorder.stop()
-                except Exception as exc:
-                    self.history.update(self.item_id, "failed", error=str(exc))
-                    self.phase, self.message, self.started = "idle", str(exc), None
-                    raise
-                finally:
-                    self.recorder = None
-                self._transcribe(target)
+                target = (
+                    "capture-focus"
+                    if self.config.delivery == "x11" and not data.get("automatic")
+                    else None
+                )
+                self._stop(target, _focus_gate)
                 return self.status()
             if self.phase != "idle":
                 raise ValueError(f"Busy ({self.phase}); wait or cancel before {action}")
@@ -109,6 +134,7 @@ class Controller:
                     self.history.update(self.item_id, "failed", error=str(exc))
                     self.message = str(exc)
                     raise
+                self.notice = None
                 self.phase, self.message = "recording", "Listening — toggle again to finish"
                 self.started = time.monotonic()
                 return self.status()
@@ -136,21 +162,6 @@ class Controller:
                 self.worker = threading.Thread(target=self._warmup, daemon=True)
                 self.worker.start()
                 return self.status()
-            if action in ("copy", "paste"):
-                text = self.history.latest_text()
-                if data.get("id"):
-                    text = next(
-                        (row["text"] for row in self.history.rows() if row["id"] == data["id"]), ""
-                    )
-                    if not text:
-                        raise ValueError("No transcript for this entry")
-                self.delivery.copy(text)
-                if action == "paste":
-                    # Explicit user shortcut: paste now, into the currently focused app.
-                    time.sleep(0.2)
-                    self.delivery.paste_key(Config.load())
-                self.message = "Copied" if action == "copy" else "Paste requested"
-                return self.status()
             if action == "clear":
                 self.preview_text = ""
                 self.history.clear()
@@ -158,6 +169,109 @@ class Controller:
                 self.message = "History and recordings cleared"
                 return self.status()
             raise ValueError(f"Unknown command: {action}")
+
+    def interrupt(self):
+        """Stop on logout without interpreting it as the user's discard command."""
+        with self.lock:
+            self.interrupted = True
+            self.cancelled = True
+            recorder, self.recorder = self.recorder, None
+            if self.item_id and (
+                self.phase in ("recording", "stopping", "transcribing")
+                or (self.phase == "delivering" and self.dictation_delivery)
+            ):
+                # Preserve a transcript already persisted before delivery, if any.
+                row = next((r for r in self.history.rows() if r["id"] == self.item_id), {})
+                self.history.update(
+                    self.item_id, "failed", row.get("text", ""), "Interrupted; reprocess audio"
+                )
+            self.phase, self.message = "interrupted", "Interrupted; audio retained for reprocessing"
+        if recorder is not None:
+            try:
+                recorder.stop()
+            except Exception:
+                pass  # The partial file remains available to recovery.
+        # An already-stopping worker owns its recorder. Let it finalize the WAV, without
+        # waiting for model inference or making a second concurrent stop call.
+        self.stop_done.wait(timeout=11)
+
+    def _stop(self, target, focus_gate=None):
+        recorder, self.recorder = self.recorder, None
+        self.stop_done.clear()
+        self.notice = None
+        self.phase, self.message, self.started = "stopping", "Stopping microphone", None
+        self.worker = threading.Thread(
+            target=self._stopped, args=(recorder, target, focus_gate), daemon=True
+        )
+        self.worker.start()
+
+    def _stopped(self, recorder, target, focus_gate):
+        try:
+            if target == "capture-focus":
+                try:
+                    target = self.delivery.focus()
+                except Exception:
+                    target = None
+            if focus_gate:
+                focus_gate["ready"].set()
+            try:
+                recorder.stop()
+            finally:
+                self.stop_done.set()
+        except Exception as exc:
+            with self.lock:
+                if not self.interrupted:
+                    self.history.update(self.item_id, "failed", error=str(exc))
+                    self.phase, self.message = "idle", str(exc)
+            return
+        with self.lock:
+            if self.interrupted:
+                return
+            if self.cancelled:
+                self.history.recording(self.item_id).unlink(missing_ok=True)
+                self.history.update(self.item_id, "cancelled")
+                self.phase, self.message = "idle", "Cancelled"
+                return
+            self.phase, self.message = "transcribing", "Transcribing locally"
+            self.history.update(self.item_id, "transcribing")
+        if focus_gate and not focus_gate["valid"]:
+            target = None
+        self._finish(target)
+
+    def _manual_delivery(self, action, data):
+        with self.lock:
+            if self.interrupted:
+                raise ValueError("Service is shutting down")
+            if self.phase != "idle":
+                raise ValueError(f"Busy ({self.phase}); wait or cancel before {action}")
+            text = self.history.latest_text()
+            if data.get("id"):
+                text = next(
+                    (row["text"] for row in self.history.rows() if row["id"] == data["id"]), ""
+                )
+                if not text:
+                    raise ValueError("No transcript for this entry")
+            config = Config.load()
+            self.phase, self.message = "delivering", "Delivering transcript"
+        try:
+            self.delivery.copy(text)
+            if action == "paste" and not self.interrupted:
+                time.sleep(0.2)
+                if not self.interrupted:
+                    self.delivery.paste_key(config)
+            with self.lock:
+                if not self.interrupted:
+                    self.message = "Copied" if action == "copy" else "Paste requested"
+        except Exception as exc:
+            with self.lock:
+                if not self.interrupted:
+                    self.message = str(exc)
+            raise
+        finally:
+            with self.lock:
+                if not self.interrupted:
+                    self.phase = "idle"
+        return self.status()
 
     def _warmup(self):
         try:
@@ -167,7 +281,8 @@ class Controller:
         except Exception as exc:
             message = f"Model unavailable: {exc}. Run mouthkeys download first."
         with self.lock:
-            self.phase, self.message = "idle", "Cancelled" if self.cancelled else message
+            if not self.interrupted:
+                self.phase, self.message = "idle", "Cancelled" if self.cancelled else message
 
     def _transcribe(self, target):
         self.phase, self.message = "transcribing", "Transcribing locally"
@@ -184,28 +299,37 @@ class Controller:
             with self.model_lock:
                 text = self.transcriber.transcribe(path, self.config)
             with self.lock:
+                if self.interrupted:
+                    return
                 if self.cancelled:
                     self.history.update(self.item_id, "cancelled")
                     path.unlink(missing_ok=True)
                     self.message = "Cancelled"
-                elif not text:
+                    return
+                if not text:
                     self.preview_text = ""
                     self.history.update(self.item_id, "failed", error="No speech detected")
                     self.message = "No speech detected; audio retained for reprocessing"
-                else:
-                    self.preview_text = text
-                    # Persist before any clipboard/keyboard work so delivery failures lose no words.
-                    self.history.update(self.item_id, "transcribed", text)
-                    result = self.delivery.deliver(text, self.config, target)
-                    self.history.update(self.item_id, result, text)
-                    self.history.prune_audio(self.item_id)
-                    self.message = (
-                        "Copied — paste into your app"
-                        if result == "copied"
-                        else "Paste requested — transcript also on clipboard"
-                    )
+                    return
+                self.preview_text = text
+                self.history.update(self.item_id, "transcribed", text)
+                self.dictation_delivery = True
+                self.phase, self.message = "delivering", "Delivering transcript"
+            result = self.delivery.deliver(text, self.config, target)
+            with self.lock:
+                if self.interrupted:
+                    return
+                self.history.update(self.item_id, result, text)
+                self.history.prune_audio(self.item_id)
+                self.message = (
+                    "Copied — paste into your app"
+                    if result == "copied"
+                    else "Paste requested — transcript also on clipboard"
+                )
         except Exception as exc:
             with self.lock:
+                if self.interrupted:
+                    return
                 if self.cancelled:
                     self.history.update(self.item_id, "cancelled")
                     self.history.recording(self.item_id).unlink(missing_ok=True)
@@ -216,7 +340,10 @@ class Controller:
                     self.message = f"{exc}. Saved in history; audio retained for reprocessing."
         finally:
             with self.lock:
-                self.phase = "idle"
+                if not self.interrupted:
+                    self.dictation_delivery = False
+                    self.phase = "idle"
+                    self._prune_budget()
 
     def _preview(self, item_id, config):
         try:
@@ -234,8 +361,18 @@ class Controller:
             with self.lock:
                 self.preview_at = time.monotonic()
 
+    def _prune_budget(self):
+        try:
+            budget = Config.load().audio_budget_mb * 1000000
+        except (OSError, ValueError, TypeError):
+            return  # Invalid settings must not stop the daemon or guess a deletion budget.
+        self.history.prune_budget(budget)
+
     def tick(self):
         with self.lock:
+            if self.phase == "idle" and time.monotonic() - self.pruned_at >= 60:
+                self._prune_budget()
+                self.pruned_at = time.monotonic()
             if self.phase == "recording":
                 try:
                     meter = live_meter(self.history.recording(self.item_id))
@@ -258,7 +395,7 @@ class Controller:
                 or time.monotonic() - self.started >= self.config.max_seconds
             ):
                 try:
-                    self.command("stop")
+                    self.command("stop", automatic=True)
                 except Exception:
                     pass  # The stop path has already persisted the error for the UI.
 
@@ -273,12 +410,15 @@ class Handler(socketserver.StreamRequestHandler):
             data = json.loads(line)
             action = data.pop("action")
             if action == "shutdown":
-                result = self.server.controller.command("cancel")
+                self.server.controller.interrupt()
+                result = self.server.controller.status()
                 threading.Thread(target=self.server.shutdown, daemon=True).start()
             else:
                 result = self.server.controller.command(action, **data)
             response = {"ok": True, "result": result}
         except Exception as exc:
+            if locals().get("action") in ("start", "stop", "toggle", "reprocess", "warmup"):
+                self.server.controller.report_error(str(exc))
             response = {"ok": False, "error": str(exc)}
         try:
             self.wfile.write(json.dumps(response).encode() + b"\n")
@@ -308,7 +448,7 @@ def serve():
             server.controller = controller
 
             def shutdown(*_):
-                controller.command("cancel")
+                controller.interrupt()
                 threading.Thread(target=server.shutdown, daemon=True).start()
 
             signal.signal(signal.SIGTERM, shutdown)
@@ -321,7 +461,7 @@ def serve():
 
 def request(action, **data):
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-        sock.settimeout(10)
+        sock.settimeout(20 if action == "shutdown" else 10)
         sock.connect(str(runtime_dir() / "control.sock"))
         sock.sendall(json.dumps({"action": action, **data}).encode() + b"\n")
         with sock.makefile("rb") as stream:
@@ -344,7 +484,7 @@ def ensure_daemon():
     with log.open("a") as output:
         log.chmod(0o600)
         subprocess.Popen(
-            [sys.executable, "-m", "mouthkeys", "daemon"],
+            python_command("mouthkeys", "daemon"),
             stdin=subprocess.DEVNULL,
             stdout=output,
             stderr=output,
@@ -364,6 +504,8 @@ def ensure_overlay():
     """Optional desktop feedback; CLI-only installations remain usable."""
     import importlib.util
 
+    if Config.load().recording_panel == "off":
+        return
     if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
         return
     if importlib.util.find_spec("PySide6") is None:
@@ -382,7 +524,7 @@ def ensure_overlay():
     with (state_dir() / "overlay.log").open("a") as output:
         os.chmod(output.name, 0o600)
         subprocess.Popen(
-            [sys.executable, "-m", "mouthkeys", "overlay"],
+            python_command("mouthkeys", "overlay"),
             stdin=subprocess.DEVNULL,
             stdout=output,
             stderr=output,

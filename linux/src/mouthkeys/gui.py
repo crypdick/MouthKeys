@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QStackedWidget,
     QTextEdit,
@@ -25,6 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 from .config import Config
+from .processes import python_command
 from .service import ensure_daemon, ensure_overlay, request
 
 COMPUTE_TYPES = [
@@ -243,18 +245,37 @@ class Window(QWidget):
             "compute_type": COMPUTE_TYPES,
             "audio_source": audio_sources(),
             "device": ["cpu", "cuda", "auto"],
+            "recording_panel": [("Show panel", "on"), ("Hide panel", "off")],
             "delivery": ["clipboard", "x11"],
             "paste_backend": ["auto", "xdotool", "wtype", "ydotool"],
             "paste_shortcut": ["ctrl+shift+v", "ctrl+v"],
+        }
+        labels = {
+            "max_seconds": "Maximum recording length",
+            "audio_budget_mb": "Audio storage budget",
+            "recording_panel": "Recording panel",
+        }
+        help_text = {
+            "max_seconds": (
+                "At the limit, recording stops and text is copied without automatic paste."
+            ),
+            "audio_budget_mb": (
+                "Oldest recovery audio, including failures, is deleted above this budget. "
+                "Transcripts stay. 1,000 MB = 1 GB."
+            ),
+            "recording_panel": (
+                "Hide the panel if your compositor tiles it or takes keyboard focus. "
+                "Dictation still works; the panel also shows loading and shortcut errors."
+            ),
         }
         for key, value in config.items():
             # faster-whisper gives existing local directories precedence over aliases.
             if key == "model" and value in MODEL_ALIASES and not Path(value).is_dir():
                 value = MODEL_ALIASES.get(value, value)
-            if key == "max_seconds":
+            if key in ("max_seconds", "audio_budget_mb"):
                 field = QSpinBox()
-                field.setRange(1, 3600)
-                field.setSuffix(" seconds")
+                field.setRange(1, 3600 if key == "max_seconds" else 1000000)
+                field.setSuffix(" seconds" if key == "max_seconds" else " MB")
                 field.setValue(value)
             else:
                 field = QComboBox()
@@ -269,7 +290,12 @@ class Window(QWidget):
                     field.setEditable(True)
                     field.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
             self.fields[key] = field
-            form.addRow(key.replace("_", " ").capitalize(), field)
+            form.addRow(labels.get(key, key.replace("_", " ").capitalize()), field)
+            if key in help_text:
+                field.setToolTip(help_text[key])
+                hint = QLabel(help_text[key])
+                hint.setWordWrap(True)
+                form.addRow("", hint)
         self.fields["model"].setToolTip(
             "Approximate transcription accuracy, strongest first (English dictation).\n"
             "Accuracy varies by language and audio; .en and distilled models are English-only.\n"
@@ -292,7 +318,10 @@ class Window(QWidget):
         warm = QPushButton("Load model into memory")
         warm.clicked.connect(lambda: self.send("warmup"))
         form.addRow(warm)
-        tabs.addWidget(settings)
+        settings_scroll = QScrollArea()
+        settings_scroll.setWidgetResizable(True)
+        settings_scroll.setWidget(settings)
+        tabs.addWidget(settings_scroll)
         self.nav.setCurrentRow(0)
         self.apply_theme()
         QApplication.styleHints().colorSchemeChanged.connect(self.apply_theme)
@@ -398,7 +427,10 @@ class Window(QWidget):
         try:
             values = {key: field_value(field) for key, field in self.fields.items()}
             Config(**values).save()
-            self.status.setText("Saved; settings apply to the next recording")
+            self.status.setText(
+                "Saved; recording settings apply next time. Panel visibility applies now; "
+                "audio budget is checked while idle."
+            )
             return True
         except Exception as exc:
             self.status.setText(str(exc))
@@ -410,7 +442,7 @@ class Window(QWidget):
         self.download = QProcess(self)
         self.download.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
         self.download.setProgram(sys.executable)
-        self.download.setArguments(["-m", "mouthkeys", "download"])
+        self.download.setArguments(python_command("mouthkeys", "download")[1:])
         self.download_button.setEnabled(False)
         self.download_button.setText("Downloading…")
 

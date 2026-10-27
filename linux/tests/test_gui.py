@@ -219,3 +219,86 @@ def test_overlay_deduplicates_meter_frames_and_resets_on_new_recording(monkeypat
     panel.animation.stop()
     panel.close()
     app.processEvents()
+
+
+def test_panel_shows_fresh_shortcut_error_even_when_idle(monkeypatch):
+    from PySide6.QtWidgets import QApplication
+
+    from mouthkeys.config import Config
+    from mouthkeys.overlay import Overlay
+
+    app = QApplication.instance() or QApplication([])
+    panel = Overlay()
+    panel.timer.stop()
+    shown = []
+    monkeypatch.setattr(panel, "show", lambda: shown.append(True))
+    data = {
+        "phase": "idle",
+        "message": "Ready",
+        "notice": {"serial": 1, "message": "Source unplugged", "at": time.time()},
+    }
+    panel.set_status(data)
+    assert shown == [True]
+    assert panel.notice[0] == "Source unplugged"
+    panel.set_status(data)
+    assert shown == [True]  # Polling must not keep extending the error timeout.
+    Config(recording_panel="off").save()
+    panel.set_status({**data, "phase": "recording"})
+    assert shown == [True]
+    for button in panel.buttons.values():
+        assert not button.icon().isNull()
+        assert button.text() == ""  # No symbol font is needed.
+    panel.close()
+    app.processEvents()
+
+
+def test_panel_can_reappear_after_disabled_during_recording(monkeypatch):
+    from PySide6.QtWidgets import QApplication
+
+    from mouthkeys.config import Config
+    from mouthkeys.overlay import Overlay
+
+    app = QApplication.instance() or QApplication([])
+    panel = Overlay()
+    panel.timer.stop()
+    shown = []
+    monkeypatch.setattr(panel, "show", lambda: shown.append(True))
+    data = {"phase": "recording", "id": "same-recording", "seconds": 1}
+    panel.set_status(data)
+    Config(recording_panel="off").save()
+    panel.set_status(data)
+    Config(recording_panel="on").save()
+    panel.set_status(data)
+    assert shown == [True, True]
+    panel.animation.stop()
+    panel.close()
+    app.processEvents()
+
+
+def test_every_config_is_editable_in_settings_and_new_options_roundtrip(monkeypatch):
+    from dataclasses import asdict
+
+    from PySide6.QtWidgets import QApplication, QScrollArea
+
+    from mouthkeys import gui
+    from mouthkeys.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(gui.Window, "poll", lambda self: None)
+    window = gui.Window()
+    window.timer.stop()
+    assert set(window.fields) == set(asdict(Config()))
+    assert window.findChild(QScrollArea) is not None
+    window.fields["audio_budget_mb"].setValue(250)
+    window.fields["recording_panel"].setCurrentIndex(
+        window.fields["recording_panel"].findData("off")
+    )
+    window.fields["max_seconds"].setValue(30)
+    assert window.save()
+    saved = Config.load()
+    assert (saved.audio_budget_mb, saved.recording_panel, saved.max_seconds) == (250, "off", 30)
+    assert window.fields["audio_budget_mb"].suffix() == " MB"
+    assert "failures" in window.fields["audio_budget_mb"].toolTip()
+    assert not window.isVisible()
+    window.close()
+    app.processEvents()

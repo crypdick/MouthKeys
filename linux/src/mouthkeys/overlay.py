@@ -7,13 +7,38 @@ import subprocess
 import sys
 import time
 
-from PySide6.QtCore import QRect, QRectF, QSocketNotifier, Qt, QTimer
-from PySide6.QtGui import QColor, QCursor, QFont, QPainter, QTextLayout
+from PySide6.QtCore import QRect, QRectF, QSize, QSocketNotifier, Qt, QTimer
+from PySide6.QtGui import QColor, QCursor, QFont, QIcon, QPainter, QPen, QPixmap, QTextLayout
 from PySide6.QtWidgets import QApplication, QPushButton, QWidget
 
-from .config import runtime_dir
+from .config import Config, runtime_dir
 from .gui import Request
+from .processes import python_command
 from .trace import Trace
+
+
+def button_icon(action, color):
+    """Small vector marks, independent of installed symbol fonts."""
+    pixmap = QPixmap(20, 20)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setPen(QPen(QColor(color), 1.5))
+    if action == "copy":
+        painter.drawRect(4, 3, 10, 11)
+        painter.drawRect(7, 6, 10, 11)
+    elif action == "history":
+        for y in (5, 10, 15):
+            painter.drawLine(4, y, 16, y)
+    elif action == "cancel":
+        painter.drawLine(5, 5, 15, 15)
+        painter.drawLine(5, 15, 15, 5)
+    else:
+        painter.drawArc(4, 4, 12, 12, 35 * 16, 290 * 16)
+        painter.drawLine(16, 3, 16, 8)
+        painter.drawLine(16, 8, 11, 8)
+    painter.end()
+    return QIcon(pixmap)
 
 
 class Overlay(QWidget):
@@ -43,15 +68,17 @@ class Overlay(QWidget):
         self.drag = None
         self.seconds = 0
         self.notice = None
+        self.notice_serial = None
         self.failures = 0
         self.buttons = {}
-        for action, glyph, tip, x, y in (
-            ("history", "≡", "Open history", 6, 29),
-            ("copy", "⧉", "Copy transcript", 6, 83),
-            ("cancel", "×", "Cancel / dismiss", 388, 29),
-            ("reprocess", "↻", "Reprocess retained audio", 388, 83),
+        for action, tip, x, y in (
+            ("history", "Open history", 6, 29),
+            ("copy", "Copy transcript", 6, 83),
+            ("cancel", "Cancel / dismiss", 388, 29),
+            ("reprocess", "Reprocess retained audio", 388, 83),
         ):
-            button = QPushButton(glyph, self)
+            button = QPushButton(self)
+            button.setIconSize(QSize(20, 20))
             button.setGeometry(x, y, 30, 30)
             button.setToolTip(tip)
             button.setAccessibleName(tip)
@@ -81,6 +108,8 @@ class Overlay(QWidget):
             f"QPushButton:pressed {{ background: {self.ink}; color: {self.surface}; }}"
             f"QPushButton:disabled {{ color: {self.dim}; }}"
         )
+        for action, button in self.buttons.items():
+            button.setIcon(button_icon(action, self.ink))
         self.update()
 
     def send(self, action, callback=None):
@@ -109,7 +138,7 @@ class Overlay(QWidget):
 
     def action(self, action):
         if action == "history":
-            subprocess.Popen([sys.executable, "-m", "mouthkeys", "gui"], start_new_session=True)
+            subprocess.Popen(python_command("mouthkeys", "gui"), start_new_session=True)
         elif action == "cancel":
             if self.active:
                 self.send("cancel")
@@ -132,6 +161,7 @@ class Overlay(QWidget):
             else:
                 self.hide()  # Shutdown/disconnect must not leave a stale recording panel.
                 self.active = False
+                self.notice_serial = None
                 self.animation.stop()
                 self.failures += 1
                 self.timer.setInterval(min(5000, 200 * 2 ** min(self.failures, 5)))
@@ -145,7 +175,12 @@ class Overlay(QWidget):
         self.positioned = True
 
     def set_status(self, data):
-        active = data["phase"] in ("recording", "transcribing")
+        if Config.load().recording_panel == "off":
+            self.hide()
+            self.active = False
+            self.notice_serial = None
+            return
+        active = data["phase"] in ("recording", "stopping", "transcribing", "delivering", "loading")
         new_recording = data.get("id") != self.data.get("id")
         if active and (not self.active or new_recording):
             self.dismiss_at = None
@@ -159,6 +194,18 @@ class Overlay(QWidget):
             self.dismiss_at = time.monotonic() + (0.6 if success else 10)
             if message == "Cancelled":
                 self.dismiss_at = 0
+        notice = data.get("notice")
+        if not notice:
+            self.notice = None
+            self.notice_serial = None
+        if notice and notice["serial"] != self.notice_serial:
+            self.notice_serial = notice["serial"]
+            if time.time() - notice["at"] < 10:
+                self.notice = (notice["message"], time.monotonic() + 10)
+                self.dismiss_at = self.notice[1]
+                if not self.positioned:
+                    self.place()
+                self.show()
         if self.dismiss_at is not None and time.monotonic() >= self.dismiss_at:
             self.hide()
         now = time.monotonic()
@@ -206,8 +253,10 @@ class Overlay(QWidget):
         text = self.data.get("preview", "")
         if phase == "idle":
             text = self.data.get("message", "Ready")
+        elif phase != "recording":
+            text = self.data.get("message", "Working…")
         elif not text:
-            text = "Listening…" if phase == "recording" else "Transcribing locally…"
+            text = "Listening…"
         if self.notice and time.monotonic() < self.notice[1]:
             text = self.notice[0]
         # Lay out prose into three 16 px lines, keeping the newest words in view.
@@ -280,7 +329,7 @@ class Overlay(QWidget):
 
 
 def active_phase(phase):
-    return phase in ("recording", "transcribing")
+    return phase in ("recording", "stopping", "transcribing", "delivering", "loading")
 
 
 def launch():

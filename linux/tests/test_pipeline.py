@@ -103,6 +103,7 @@ def test_cancel_recording_stops_capture_without_delivery(controller):
     item = controller.command("start")["id"]
     recorder = controller.recorder
     controller.command("cancel")
+    finish(controller)
     assert recorder.stopped
     assert not controller.history.recording(item).exists()
     assert controller.history.rows()[0]["status"] == "cancelled"
@@ -203,8 +204,9 @@ def test_capture_stop_failure_retains_audio(controller):
         raise RuntimeError("Capture hung")
 
     controller.recorder.stop = fail
-    with pytest.raises(RuntimeError, match="Capture hung"):
-        controller.command("stop")
+    controller.command("stop")
+    finish(controller)
+    assert "Capture hung" in controller.message
     assert controller.phase == "idle"
     assert controller.recorder is None
     assert controller.history.recording(controller.item_id).exists()
@@ -305,6 +307,7 @@ def test_cancelled_preview_cannot_leak_into_next_recording(controller):
     controller.tick()
     assert entered.wait(2)
     controller.command("cancel")
+    finish(controller)
     controller.command("start")
     release.set()
     controller.preview_worker.join(3)
@@ -367,3 +370,188 @@ def test_failed_final_never_exposes_provisional_text_as_copyable(controller, emp
     finish(controller)
     assert controller.status()["preview"] == ""
     assert not controller.delivery.calls
+
+
+@pytest.mark.parametrize("wall_clock", [False, True])
+def test_automatic_stop_never_snapshots_a_paste_destination(controller, wall_clock):
+    Config(delivery="x11").save()
+    controller.command("start")
+
+    def unexpected():
+        raise AssertionError("An automatic stop must not select the focused window")
+
+    controller.delivery.focus = unexpected
+    if wall_clock:
+        controller.started -= controller.config.max_seconds + 1
+    else:
+        controller.recorder.ended = True
+    controller.tick()
+    finish(controller)
+    assert controller.delivery.calls[0][2] is None
+
+
+def test_stop_remains_responsive_and_cancel_suppresses_inference(controller):
+    entered, release = threading.Event(), threading.Event()
+    controller.command("start")
+
+    def stop():
+        entered.set()
+        assert release.wait(3)
+
+    controller.recorder.stop = stop
+    controller.command("stop")
+    assert entered.wait(1)
+    # A separate thread catches regressions that hold the controller lock during stop.
+    result = []
+    probe = threading.Thread(target=lambda: result.append(controller.command("cancel")))
+    probe.start()
+    try:
+        probe.join(0.5)
+        assert not probe.is_alive()
+        assert result[0]["phase"] == "stopping"
+    finally:
+        release.set()
+        probe.join(2)
+        finish(controller)
+    assert not controller.transcriber.entered.is_set()
+    assert not controller.delivery.calls
+
+
+def test_status_responsive_during_committed_delivery(controller):
+    entered, release = threading.Event(), threading.Event()
+
+    def deliver(*args):
+        entered.set()
+        assert release.wait(3)
+        return "copied"
+
+    controller.delivery.deliver = deliver
+    controller.command("start")
+    controller.command("stop")
+    assert entered.wait(2)
+    result = []
+    probe = threading.Thread(target=lambda: result.append(controller.status()))
+    probe.start()
+    try:
+        probe.join(0.5)
+        assert not probe.is_alive()
+        assert result[0]["phase"] == "delivering"
+        with pytest.raises(ValueError, match="Delivery already started"):
+            controller.command("cancel")
+    finally:
+        release.set()
+        probe.join(2)
+        finish(controller)
+
+
+@pytest.mark.parametrize("during_inference", [False, True])
+def test_shutdown_preserves_audio_without_late_delivery(controller, during_inference):
+    item = controller.command("start")["id"]
+    if during_inference:
+        controller.transcriber.release.clear()
+        controller.command("stop")
+        assert controller.transcriber.entered.wait(2)
+    else:
+        recorder = controller.recorder
+    controller.interrupt()
+    if during_inference:
+        controller.transcriber.release.set()
+        controller.worker.join(3)
+        assert not controller.worker.is_alive()
+    else:
+        assert recorder.stopped
+    assert controller.history.recording(item).exists()
+    assert controller.history.rows()[0]["status"] == "failed"
+    assert not controller.delivery.calls
+    restarted = Controller(controller.history, controller.transcriber, controller.delivery)
+    restarted.command("reprocess", id=item)
+    finish(restarted)
+    assert restarted.history.rows()[0]["status"] == "copied"
+
+
+def test_audio_budget_prunes_old_failures_but_keeps_text_and_active_audio(controller):
+    history = controller.history
+    ids = [str(uuid.uuid4()) for _ in range(3)]
+    for index, item in enumerate(ids):
+        history.begin(item)
+        history.recording(item).write_bytes(b"x" * 100)
+        if index < 2:
+            history.update(item, "failed", text=f"Transcript {index}")
+        with history.connect() as conn:
+            conn.execute("UPDATE history SET created=? WHERE id=?", (index, item))
+    history.prune_budget(100)
+    assert not history.recording(ids[0]).exists()
+    assert history.recording(ids[1]).exists()
+    assert history.recording(ids[2]).exists()  # Active capture is outside the recovery budget.
+    assert len(history.rows()) == 3
+    assert history.latest_text() == "Transcript 1"
+
+
+def test_idle_maintenance_enforces_changed_audio_budget(controller):
+    Config(audio_budget_mb=1).save()
+    for index in range(2):
+        item = str(uuid.uuid4())
+        controller.history.begin(item)
+        controller.history.recording(item).write_bytes(b"x" * 700000)
+        controller.history.update(item, "failed", text=f"Transcript {index}")
+    controller.tick()
+    assert sum(p.stat().st_size for p in controller.history.audio.glob("*.wav")) <= 1000000
+    assert len(controller.history.rows()) == 2
+
+
+def test_explicit_stop_snapshots_focus_before_acknowledging(controller):
+    Config(delivery="x11").save()
+    controller.command("start")
+    entered, release = threading.Event(), threading.Event()
+
+    def focus():
+        entered.set()
+        assert release.wait(3)
+        return "original-window"
+
+    controller.delivery.focus = focus
+    responses = []
+    caller = threading.Thread(target=lambda: responses.append(controller.command("stop")))
+    caller.start()
+    try:
+        assert entered.wait(1)
+        assert caller.is_alive()  # No acknowledgment before the snapshot.
+        assert controller.status()["phase"] == "stopping"
+    finally:
+        release.set()
+        caller.join(2)
+        finish(controller)
+    assert responses
+    assert controller.delivery.calls[0][2] == "original-window"
+
+
+def test_shutdown_during_manual_copy_preserves_completed_history(controller):
+    controller.command("start")
+    controller.command("stop")
+    finish(controller)
+    original = controller.history.rows()[0]
+    entered, release = threading.Event(), threading.Event()
+
+    def copy(text):
+        entered.set()
+        assert release.wait(3)
+
+    controller.delivery.copy = copy
+    caller = threading.Thread(target=lambda: controller.command("copy"))
+    caller.start()
+    try:
+        assert entered.wait(1)
+        controller.interrupt()
+        assert controller.history.rows()[0] == original
+    finally:
+        release.set()
+        caller.join(2)
+    assert not caller.is_alive()
+
+
+def test_error_identifiers_are_distinct_across_daemon_restarts(controller):
+    controller.report_error("Busy (loading)")
+    first = controller.status()["notice"]["serial"]
+    restarted = Controller(controller.history, controller.transcriber, controller.delivery)
+    restarted.report_error("Source unplugged")
+    assert restarted.status()["notice"]["serial"] != first

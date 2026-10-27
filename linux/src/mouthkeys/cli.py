@@ -77,7 +77,11 @@ def main(argv=None):
             if args.key:
                 if args.value is None:
                     parser.error("config KEY requires VALUE")
-                config[args.key] = int(args.value) if args.key == "max_seconds" else args.value
+                config[args.key] = (
+                    int(args.value)
+                    if args.key in ("max_seconds", "audio_budget_mb")
+                    else args.value
+                )
                 Config(**config).save()
             elif args.value:
                 parser.error("config requires KEY VALUE")
@@ -116,11 +120,16 @@ def main(argv=None):
             if args.command != "shutdown":
                 ensure_daemon()
             action = "clear" if args.command == "clear-history" else args.command
-            result = request(action, **({"id": args.id} if hasattr(args, "id") else {}))
-            if args.command in ("start", "toggle", "reprocess"):
-                from .service import ensure_overlay
+            try:
+                result = request(action, **({"id": args.id} if hasattr(args, "id") else {}))
+            finally:
+                if args.command in ("start", "stop", "toggle", "reprocess", "warmup"):
+                    from .service import ensure_overlay
 
-                ensure_overlay()
+                    try:
+                        ensure_overlay()
+                    except Exception as exc:
+                        print(f"MouthKeys panel: {exc}", file=sys.stderr)
             print(json.dumps(result, indent=2))
         return 0
     except KeyboardInterrupt:

@@ -1,13 +1,13 @@
 import os
 import signal
 import subprocess
-import sys
 import tempfile
 import time
 import wave
 from pathlib import Path
 
 from .config import Config
+from .processes import python_command
 
 
 class Recorder:
@@ -17,9 +17,7 @@ class Recorder:
         try:
             self.process = subprocess.Popen(
                 [
-                    sys.executable,
-                    "-m",
-                    "mouthkeys.capture",
+                    *python_command("mouthkeys.capture"),
                     "ffmpeg",
                     "-hide_banner",
                     "-loglevel",

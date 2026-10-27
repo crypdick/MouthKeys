@@ -79,14 +79,18 @@ after changing desktop session types; its display environment is inherited at la
    `mouthkeys status` also reports it for a status bar. With the GUI extra installed, a floating
    panel appears automatically, including when Settings is closed. It shows provisional words
    while you speak, then the final delivery status. It never intentionally takes keyboard focus.
-   There are no sounds.
+   Loading and failed shortcut commands also appear in the panel. There are no sounds.
 3. When transcription finishes, paste with Ctrl+V, or Ctrl+Shift+V in most terminals.
 
 The panel opens near the bottom of the screen containing the pointer. Drag it to reposition;
 double-click its surface to reset. History opens the main window, Copy copies the finished
 transcript, × cancels/dismisses, and Reprocess retries retained audio. Linux compositors control
 placement and stacking: Wayland may ignore requested positioning or keep other windows above
-it. Verify focus behavior on your desktop before enabling X11 automatic paste.
+it. Focus behavior requires a real desktop check; offscreen Qt tests cannot verify it.
+If your compositor tiles the panel or gives it focus, disable it in Settings or with
+`mouthkeys config recording_panel off` and use `mouthkeys status` for feedback. Restore it
+with `mouthkeys config recording_panel on`. Verify focus behavior on your desktop before
+enabling X11 automatic paste.
 
 Live previews run locally on the selected model, roughly two seconds after the previous preview
 finishes, over the most recent 20 seconds of audio. They can revise words and lag on slower CPUs;
@@ -97,10 +101,13 @@ animation clock. Bars scroll at 12 per second of speech, ease to their measured 
 hold during silence after a 250 ms hangover, following the native macOS motion. Only the newest
 20 ms of audio is metered; preview inference does not drive animation. Cancel discards the preview and suppresses final delivery.
 
-Recordings stop automatically after five minutes by default. A busy model rejects additional
+Recordings stop automatically after five minutes by default. Automatic stops only copy;
+they never select the currently focused window for automatic paste. A busy model rejects additional
 recording commands explicitly; it never silently replaces pending work. Cancel suppresses
 delivery even if inference has already started. Inference must finish before another recording
-can start. Only one model worker runs at a time.
+can start. Only one model worker runs at a time. Capture shutdown and text delivery run
+outside the controller state lock so status remains responsive. Once delivery has started,
+cancellation reports that it is too late to withdraw the clipboard/paste operation.
 
 ## Text delivery
 
@@ -117,8 +124,8 @@ mouthkeys config delivery x11
 mouthkeys config paste_shortcut ctrl+v
 ```
 
-The daemon snapshots the focused X window at stop and rechecks before sending the paste
-shortcut. If the window changed or cannot be identified, it only copies. It never activates a
+The daemon snapshots the focused X window on an explicit stop, before acknowledging it,
+and rechecks before sending the paste shortcut. If the window changed or cannot be identified, it only copies. It never activates a
 window or sends Return. This check cannot distinguish tabs, panes, or fields within the same
 X window and is not equivalent to macOS Accessibility validation. Use clipboard mode if you
 switch panes while waiting. A `paste_requested` status means the shortcut was sent, not proof
@@ -200,12 +207,22 @@ History and audio are private files in `$XDG_STATE_HOME/mouthkeys` (normally
 `~/.local/state/mouthkeys`). Configuration is in `$XDG_CONFIG_HOME/mouthkeys/config.json`;
 models are in `$XDG_CACHE_HOME/mouthkeys/models`. The control socket is user-private under
 `$XDG_RUNTIME_DIR/mouthkeys`, falling back to the state directory. Audio for the latest success
-and **all failures** is retained for recovery, including after a crash; older successful audio
-is removed after a successful dictation. Each reprocess creates a separate attempt, preserving
-the original transcript if the retry fails. History and failed audio are not automatically expired:
-use Clear history to delete them. No transcript is written to the daemon diagnostic log.
+and failed/interrupted attempts is retained for recovery, including after a crash; older
+successful audio is removed after a successful dictation. Each reprocess creates a separate attempt, preserving
+the original transcript if the retry fails. Retained audio (including failures) has a configurable **4,000 MB** budget, matching the
+upstream macOS default budget. Oldest inactive audio is deleted first; transcripts remain.
+The budget is enforced after transcription and once a minute while idle, including after
+restarting. An active recording is excluded until it finishes. Adjust it in Settings or with
+`mouthkeys config audio_budget_mb 1000` (decimal MB). A recording larger than the budget
+can lose its recovery audio immediately. Clear history deletes transcripts and audio.
 
-To stop the background service and cancel its current recording, use `mouthkeys shutdown`.
+Upstream macOS saves ordinary history audio only when enabled (off by default); Linux
+retains recovery audio by default. The storage budget bounds that Linux behavior, rather
+than implying parity with upstream's audio-saving preference. No transcript is written to the daemon diagnostic log.
+
+To stop the background service, use `mouthkeys shutdown`. Shutdown, SIGTERM, and SIGINT
+stop capture and preserve interrupted audio for reprocessing, without starting transcription
+or delivery. Use `mouthkeys cancel` to explicitly discard an ongoing recording.
 Remove `~/.config/autostart/mouthkeys.desktop` to
 disable login startup. Uninstall with `uv tool uninstall mouthkeys-linux` and remove
 `~/.local/share/applications/mouthkeys.desktop`. These steps leave history/models intact;
@@ -237,10 +254,18 @@ Before calling a desktop setup verified, run this manual check:
 - Switch windows while X11 inference runs; confirm it falls back to copy.
 - Reprocess retained audio, copy from history, and verify recovery after restarting the daemon.
 - Confirm the microphone indicator turns off on stop/cancel and at the maximum duration.
+- With X11 automatic paste enabled, let the duration limit expire after switching windows:
+  confirm text is copied without any paste key being sent.
+- Terminate the daemon during recording and restart it; confirm audio can be reprocessed.
+- Invoke toggle during model warmup and with an unavailable microphone; confirm visible
+  error feedback, then confirm the next successful recording clears it.
 - Close Settings and start with the shortcut: confirm the floating panel appears, shows words
   while speaking, and leaves your editor focused. Check both light and dark system appearances.
 - Stop, cancel, and start again while preview inference is running; check that old words never
   appear in the new recording and cancellation never changes the clipboard.
+- On GNOME Wayland, KDE Wayland, and Sway, start from a focused editor and keep typing;
+  confirm panel appearance leaves keyboard focus and manual paste in the editor. If it fails,
+  disable the panel and record the compositor/backend version; these setups are not yet verified.
 - Check the panel's positioning, drag/reset, history, copy, reprocess, and dismissal on your
   compositor; final delivery should still target the editor when using X11 automatic paste.
 

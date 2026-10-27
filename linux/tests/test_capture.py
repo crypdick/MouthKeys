@@ -55,7 +55,7 @@ def test_recorder_uses_supervised_ffmpeg_and_finishes_wav(monkeypatch, tmp_path)
 
     class FakeProcess:
         def __init__(self, args, **kwargs):
-            assert args[1:4] == ["-m", "mouthkeys.capture", "ffmpeg"]
+            assert args[1:5] == ["-P", "-m", "mouthkeys.capture", "ffmpeg"]
             assert args[args.index("-f") + 1] == "pulse"
             before_input = args[: args.index("-i")]
             assert before_input[before_input.index("-sample_rate") + 1] == "16000"

@@ -7,7 +7,7 @@ from .config import private_dir, state_dir
 
 
 class History:
-    """Private local history. Audio is retained only for failures and the latest recording."""
+    """Private local history. Audio recovery is bounded by a storage budget."""
 
     def __init__(self, root: Path | None = None):
         self.root = private_dir(root or state_dir())
@@ -75,6 +75,30 @@ class History:
             for row in rows:
                 if row["id"] != keep:
                     self.recording(row["id"]).unlink(missing_ok=True)
+
+    def prune_budget(self, budget_bytes):
+        """Prune oldest inactive audio, including failures; preserve transcript rows."""
+        with self.connect() as conn:
+            active = {
+                row["id"]
+                for row in conn.execute(
+                    "SELECT id FROM history WHERE status IN ('recording', 'transcribing')"
+                )
+            }
+            created = {
+                row["id"]: row["created"] for row in conn.execute("SELECT id, created FROM history")
+            }
+        files = []
+        for path in self.audio.glob("*.wav"):
+            if path.stem not in active:
+                stat = path.stat()
+                files.append((created.get(path.stem, stat.st_mtime), path, stat.st_size))
+        total = sum(size for _, _, size in files)
+        for _, path, size in sorted(files):
+            if total <= budget_bytes:
+                break
+            path.unlink(missing_ok=True)
+            total -= size
 
     def recording(self, item_id: str):
         # IDs arrive over IPC; never let a history request escape the recordings directory.

@@ -42,13 +42,21 @@ class Config:
     paste_backend: str = "auto"
     paste_shortcut: str = "ctrl+shift+v"
     max_seconds: int = 300
+    audio_budget_mb: int = 4000
+    recording_panel: str = "on"
 
     def validate(self):
         for key, value in asdict(self).items():
-            if key != "max_seconds" and (not isinstance(value, str) or not value.strip()):
+            if key not in ("max_seconds", "audio_budget_mb") and (
+                not isinstance(value, str) or not value.strip()
+            ):
                 raise ValueError(f"{key} must be a nonempty string")
         if type(self.max_seconds) is not int or not 1 <= self.max_seconds <= 3600:
             raise ValueError("max_seconds must be between 1 and 3600")
+        if type(self.audio_budget_mb) is not int or not 1 <= self.audio_budget_mb <= 1000000:
+            raise ValueError("audio_budget_mb must be between 1 and 1000000")
+        if self.recording_panel not in ("on", "off"):
+            raise ValueError("recording_panel must be on or off")
         if self.delivery not in ("clipboard", "x11"):
             raise ValueError("delivery must be clipboard or x11")
         if self.paste_backend not in ("auto", "xdotool", "wtype", "ydotool"):

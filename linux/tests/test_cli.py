@@ -88,3 +88,68 @@ def test_overlay_launcher_skips_headless_and_existing_panel(monkeypatch):
             wake.settimeout(1)
             ensure_overlay()
             assert wake.recv(64) == b"wake"
+
+
+def test_installed_command_from_untrusted_directory_starts_safe_daemon(tmp_path):
+    package = tmp_path / "mouthkeys"
+    package.mkdir()
+    (package / "__init__.py").write_text("raise RuntimeError('untrusted package imported')")
+    (tmp_path / "json.py").write_text("raise RuntimeError('untrusted dependency imported')")
+    # Use the actual installed console entry point; its child must not import cwd.
+    executable = Path(sys.executable).parent / "mouthkeys"
+    try:
+        result = subprocess.run(
+            [str(executable), "status"], cwd=tmp_path, capture_output=True, timeout=8
+        )
+        assert result.returncode == 0, result.stderr.decode()
+        assert json.loads(result.stdout)["phase"] == "idle"
+    finally:
+        try:
+            request("shutdown")
+        except (FileNotFoundError, ConnectionRefusedError):
+            pass
+        deadline = time.monotonic() + 3
+        while (runtime_dir() / "control.sock").exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+    assert not (runtime_dir() / "control.sock").exists()
+
+
+def test_failed_shortcut_still_starts_feedback_panel(monkeypatch, capsys):
+    from mouthkeys import service
+
+    launched = []
+    monkeypatch.setattr(service, "ensure_daemon", lambda: None)
+    monkeypatch.setattr(service, "ensure_overlay", lambda: launched.append(True))
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("Busy (loading)")
+
+    monkeypatch.setattr(service, "request", fail)
+    assert main(["toggle"]) == 1
+    assert launched == [True]
+    assert "Busy (loading)" in capsys.readouterr().err
+
+
+def test_socket_errors_persist_feedback_for_panel():
+    import threading
+
+    from mouthkeys.service import Controller, Handler, Server
+
+    controller = Controller()
+    controller.phase = "loading"
+    with Server(str(runtime_dir() / "control.sock"), Handler) as server:
+        server.controller = controller
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            import pytest
+
+            with pytest.raises(RuntimeError, match="Busy"):
+                request("toggle")
+            status = request("status")
+            assert status["phase"] == "loading"
+            assert "Busy (loading)" in status["notice"]["message"]
+        finally:
+            server.shutdown()
+            thread.join(2)
+        assert not thread.is_alive()
