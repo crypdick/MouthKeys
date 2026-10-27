@@ -40,6 +40,38 @@ COMPUTE_TYPES = [
     "int16",
 ]
 
+MODEL_ALIASES = {"large": "large-v3", "turbo": "large-v3-turbo"}
+# Approximate accuracy for short English dictation, strongest first. Language and
+# audio can change the ranking; .en and distilled models only support English.
+# See https://huggingface.co/distil-whisper/distil-large-v3.5 for comparisons.
+MODEL_ACCURACY_ORDER = (
+    "large-v3",
+    "distil-large-v3.5",
+    "large-v3-turbo",
+    "distil-large-v3",
+    "large-v2",
+    "distil-large-v2",
+    "large-v1",
+    "medium.en",
+    "medium",
+    "distil-medium.en",
+    "small.en",
+    "small",
+    "distil-small.en",
+    "base.en",
+    "base",
+    "tiny.en",
+    "tiny",
+)
+
+
+def model_choices():
+    from faster_whisper import available_models
+
+    available = {MODEL_ALIASES.get(name, name) for name in available_models()}
+    ranked = [name for name in MODEL_ACCURACY_ORDER if name in available]
+    return ranked + sorted(available.difference(MODEL_ACCURACY_ORDER))
+
 
 def language_choices():
     # Match the tokenizer in our installed, version-bounded transcription engine.
@@ -204,10 +236,9 @@ class Window(QWidget):
         form = QFormLayout(settings)
         self.fields = {}
         config = asdict(Config.load())
-        from faster_whisper import available_models
 
         choices = {
-            "model": available_models(),
+            "model": model_choices(),
             "language": language_choices(),
             "compute_type": COMPUTE_TYPES,
             "audio_source": audio_sources(),
@@ -217,6 +248,8 @@ class Window(QWidget):
             "paste_shortcut": ["ctrl+shift+v", "ctrl+v"],
         }
         for key, value in config.items():
+            if key == "model":
+                value = MODEL_ALIASES.get(value, value)
             if key == "max_seconds":
                 field = QSpinBox()
                 field.setRange(1, 3600)
@@ -237,6 +270,8 @@ class Window(QWidget):
             self.fields[key] = field
             form.addRow(key.replace("_", " ").capitalize(), field)
         self.fields["model"].setToolTip(
+            "Approximate transcription accuracy, strongest first (English dictation).\n"
+            "Accuracy varies by language and audio; .en and distilled models are English-only.\n"
             "Choose a model or enter a local model path / Hugging Face ID."
         )
         self.fields["audio_source"].setToolTip(

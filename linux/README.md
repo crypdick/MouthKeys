@@ -151,6 +151,9 @@ device, and delivery settings. Languages show names and save the engine's langua
 also accept custom model paths/IDs and PulseAudio source names. Microphone discovery uses
 `pactl` when available; otherwise you can enter a source name. Recording duration uses a
 bounded seconds control. Selecting a model does not download it: use **Download selected model**.
+Models appear in approximate transcription accuracy order, strongest first, for short English
+dictation. Accuracy varies by language and audio; `.en` and distilled models are English-only.
+Duplicate aliases use their specific names: `large-v3` and `large-v3-turbo`.
 
 ```sh
 # More accurate English model (larger and slower on CPU):
