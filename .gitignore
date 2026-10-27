@@ -221,6 +221,10 @@ builds/
 # Python bytecode (scripts/)
 __pycache__/
 *.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
 design/visual-language/native-renders/
 
 ## Release output (scripts/release.sh)
