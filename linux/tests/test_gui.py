@@ -106,6 +106,28 @@ def test_model_dropdown_uses_specific_names_for_saved_aliases(monkeypatch, model
     app.processEvents()
 
 
+@pytest.mark.parametrize("model", ["large", "turbo"])
+def test_model_dropdown_preserves_local_directory_named_like_alias(monkeypatch, tmp_path, model):
+    from PySide6.QtWidgets import QApplication
+
+    from mouthkeys import gui
+    from mouthkeys.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / model).mkdir()
+    Config(model=model).save()
+    monkeypatch.setattr(gui.Window, "poll", lambda self: None)
+    window = gui.Window()
+    window.timer.stop()
+    assert window.fields["model"].currentText() == model
+    assert window.save()
+    assert Config.load().model == model
+    assert not window.isVisible()
+    window.close()
+    app.processEvents()
+
+
 def test_microphone_choices_use_discovery_without_capture(monkeypatch):
     import subprocess
 

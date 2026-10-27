@@ -248,7 +248,8 @@ class Window(QWidget):
             "paste_shortcut": ["ctrl+shift+v", "ctrl+v"],
         }
         for key, value in config.items():
-            if key == "model":
+            # faster-whisper gives existing local directories precedence over aliases.
+            if key == "model" and value in MODEL_ALIASES and not Path(value).is_dir():
                 value = MODEL_ALIASES.get(value, value)
             if key == "max_seconds":
                 field = QSpinBox()
