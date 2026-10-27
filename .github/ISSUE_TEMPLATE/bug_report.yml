@@ -61,10 +61,10 @@ body:
     validations:
       required: false
   - type: input
-    id: macos-version
+    id: linux-version
     attributes:
-      label: macOS Version
-      placeholder: "macOS 15.5"
+      label: Linux distribution and desktop Version
+      placeholder: "Linux distribution and desktop 15.5"
     validations:
       required: true
   - type: dropdown
