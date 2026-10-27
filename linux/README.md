@@ -209,8 +209,8 @@ models are in `$XDG_CACHE_HOME/mouthkeys/models`. The control socket is user-pri
 `$XDG_RUNTIME_DIR/mouthkeys`, falling back to the state directory. Audio for the latest success
 and failed/interrupted attempts is retained for recovery, including after a crash; older
 successful audio is removed after a successful dictation. Each reprocess creates a separate attempt, preserving
-the original transcript if the retry fails. Retained audio (including failures) has a configurable **4,000 MB** budget, matching the
-upstream macOS default budget. Oldest inactive audio is deleted first; transcripts remain.
+the original transcript if the retry fails. Retained audio (including failures) has a configurable **4,000 MB** budget, inspired by
+upstream macOS's budget-based retention (whose default is 4 GiB). Oldest inactive audio is deleted first; transcripts remain.
 The budget is enforced after transcription and once a minute while idle, including after
 restarting. An active recording is excluded until it finishes. Adjust it in Settings or with
 `mouthkeys config audio_budget_mb 1000` (decimal MB). A recording larger than the budget
